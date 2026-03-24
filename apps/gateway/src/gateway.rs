@@ -146,6 +146,7 @@ impl GatewayServer {
         // The fallback returns 400 Bad Request for anything other than defined routes.
         let axum_router = Router::new()
             .route("/healthz", axum::routing::get(healthz))
+            .route("/metrics", axum::routing::get(metrics_handler))
             .route("/me", axum::routing::get(me))
             .route(
                 "/api/vault/{provider}/pair",
@@ -181,6 +182,15 @@ impl GatewayServer {
 
 async fn healthz() -> StatusCode {
     StatusCode::OK
+}
+
+/// Prometheus metrics endpoint — scraped by VictoriaMetrics.
+async fn metrics_handler() -> (StatusCode, [(hyper::header::HeaderName, &'static str); 1], String) {
+    (
+        StatusCode::OK,
+        [(hyper::header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        crate::metrics::render(),
+    )
 }
 
 /// Protected: returns the authenticated user's ID.
@@ -286,6 +296,9 @@ async fn handle_connect(
                     resp.agent_id,
                 ),
                 Err(ConnectError::InvalidToken) => {
+                    crate::metrics::AUTH_FAILURES_TOTAL
+                        .with_label_values(&["invalid_token"])
+                        .inc();
                     warn!(peer = %peer_addr, host = %host, "CONNECT rejected: invalid agent token");
                     return Ok(respond_407());
                 }
@@ -319,11 +332,18 @@ async fn handle_connect(
         }
     }
 
+    // Record metrics
+    let mode_label = if intercept { "mitm" } else { "tunnel" };
+    let auth_label = if agent_token.is_some() { "true" } else { "false" };
+    crate::metrics::CONNECT_TOTAL
+        .with_label_values(&[mode_label, auth_label])
+        .inc();
+
     info!(
         request_id = %request_id,
         peer = %peer_addr,
         host = %host,
-        mode = if intercept { "mitm" } else { "tunnel" },
+        mode = mode_label,
         injection_count = injection_rules.len(),
         policy_count = policy_rules.len(),
         agent_id = agent_id.as_deref().unwrap_or("-"),
@@ -460,10 +480,15 @@ async fn forward_request(
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| "/".to_string());
     let url = format!("https://{host}{path}");
+    let hostname = strip_port(host);
+    let request_start = std::time::Instant::now();
 
     // Check policy rules before forwarding
     match policy::evaluate(method.as_str(), &path, policy_rules, agent_token, cache).await {
         PolicyDecision::Blocked => {
+            crate::metrics::POLICY_DECISIONS_TOTAL
+                .with_label_values(&["blocked"])
+                .inc();
             warn!(method = %method, url = %url, "BLOCKED by policy rule");
             let body = serde_json::json!({
                 "error": "blocked_by_policy",
@@ -484,6 +509,9 @@ async fn forward_request(
             window,
             retry_after_secs,
         } => {
+            crate::metrics::POLICY_DECISIONS_TOTAL
+                .with_label_values(&["rate_limited"])
+                .inc();
             warn!(method = %method, url = %url, limit, window, "RATE LIMITED by policy rule");
             let body = serde_json::json!({
                 "error": "rate_limited",
@@ -550,6 +578,20 @@ async fn forward_request(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("-");
 
+    // Record metrics
+    let elapsed = request_start.elapsed().as_secs_f64();
+    crate::metrics::REQUESTS_TOTAL
+        .with_label_values(&[hostname, method.as_str(), status.as_str()])
+        .inc();
+    crate::metrics::REQUEST_DURATION
+        .with_label_values(&[hostname, method.as_str()])
+        .observe(elapsed);
+    if injection_count > 0 {
+        crate::metrics::SECRETS_INJECTED_TOTAL
+            .with_label_values(&[hostname])
+            .inc_by(injection_count as u64);
+    }
+
     info!(
         request_id = %request_id,
         method = %method,
@@ -557,6 +599,7 @@ async fn forward_request(
         status = %status.as_u16(),
         content_type = %content_type,
         injections_applied = injection_count,
+        duration_ms = format!("{:.1}", elapsed * 1000.0),
         "MITM"
     );
 

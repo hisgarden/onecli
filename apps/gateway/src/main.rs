@@ -26,6 +26,7 @@ mod crypto;
 mod db;
 mod gateway;
 mod inject;
+mod metrics;
 mod policy;
 mod vault;
 
@@ -93,6 +94,9 @@ async fn main() -> Result<()> {
     let data_dir = expand_tilde(&cli.data_dir);
 
     info!(data_dir = %data_dir.display(), "starting onecli-gateway");
+
+    // Initialize Prometheus metrics
+    metrics::init();
 
     // Load or generate CA
     let ca = CertificateAuthority::load_or_generate(&data_dir).await?;

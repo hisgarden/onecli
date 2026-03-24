@@ -61,6 +61,10 @@ futures-util = "0.3"
 # Error handling
 anyhow = "1"
 
+# Metrics (Prometheus format — scraped by VictoriaMetrics)
+prometheus = "0.14"
+lazy_static = "1"
+
 # Time (for certificate validity)
 time = "0.3"
 
