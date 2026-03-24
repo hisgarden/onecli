@@ -134,6 +134,24 @@ async fn main() -> Result<()> {
     // OSS: in-memory DashMap. Cloud: Redis (ElastiCache with TLS + AUTH).
     let cache = cache::create_store().await?;
 
+    // Background task: reap expired vault sessions every hour
+    let reaper_pool = policy_engine.pool.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            match db::reap_expired_vault_sessions(&reaper_pool).await {
+                Ok(count) if count > 0 => {
+                    info!(purged = count, "reaped expired vault sessions");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to reap expired vault sessions");
+                }
+                _ => {}
+            }
+        }
+    });
+
     info!(port = cli.port, "gateway ready");
 
     // Start the gateway server (blocks forever)

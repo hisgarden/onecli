@@ -160,13 +160,18 @@ pub(crate) async fn find_policy_rules_by_account(
 // ── Vault connection queries ────────────────────────────────────────────
 
 /// Find a vault connection for an account + provider pair.
+/// Find a vault connection, skipping expired sessions.
 pub(crate) async fn find_vault_connection(
     pool: &PgPool,
     account_id: &str,
     provider: &str,
 ) -> Result<Option<VaultConnectionRow>> {
     sqlx::query_as::<_, VaultConnectionRow>(
-        r#"SELECT id, provider, name, status, connection_data FROM vault_connections WHERE account_id = $1 AND provider = $2 LIMIT 1"#,
+        r#"SELECT id, provider, name, status, connection_data
+           FROM vault_connections
+           WHERE account_id = $1 AND provider = $2
+             AND (expires_at IS NULL OR expires_at > NOW())
+           LIMIT 1"#,
     )
     .bind(account_id)
     .bind(provider)
@@ -176,6 +181,7 @@ pub(crate) async fn find_vault_connection(
 }
 
 /// Upsert a vault connection (insert or update on account_id + provider conflict).
+/// Sets `expires_at` to now + 24 hours and `last_used_at` to now.
 pub(crate) async fn upsert_vault_connection(
     pool: &PgPool,
     account_id: &str,
@@ -184,10 +190,10 @@ pub(crate) async fn upsert_vault_connection(
     connection_data: Option<&serde_json::Value>,
 ) -> Result<()> {
     sqlx::query(
-        r#"INSERT INTO vault_connections (id, account_id, provider, status, connection_data, created_at, updated_at)
-           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, NOW(), NOW())
+        r#"INSERT INTO vault_connections (id, account_id, provider, status, connection_data, last_used_at, expires_at, created_at, updated_at)
+           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, NOW(), NOW() + INTERVAL '24 hours', NOW(), NOW())
            ON CONFLICT (account_id, provider)
-           DO UPDATE SET status = $3, connection_data = $4, updated_at = NOW()"#,
+           DO UPDATE SET status = $3, connection_data = $4, last_used_at = NOW(), expires_at = NOW() + INTERVAL '24 hours', updated_at = NOW()"#,
     )
     .bind(account_id)
     .bind(provider)
@@ -199,7 +205,7 @@ pub(crate) async fn upsert_vault_connection(
     Ok(())
 }
 
-/// Update only the connection_data JSON for an existing vault connection.
+/// Update connection_data JSON and refresh TTL for an existing vault connection.
 pub(crate) async fn update_vault_connection_data(
     pool: &PgPool,
     account_id: &str,
@@ -207,7 +213,9 @@ pub(crate) async fn update_vault_connection_data(
     connection_data: &serde_json::Value,
 ) -> Result<()> {
     sqlx::query(
-        r#"UPDATE vault_connections SET connection_data = $3, updated_at = NOW() WHERE account_id = $1 AND provider = $2"#,
+        r#"UPDATE vault_connections
+           SET connection_data = $3, last_used_at = NOW(), expires_at = NOW() + INTERVAL '24 hours', updated_at = NOW()
+           WHERE account_id = $1 AND provider = $2"#,
     )
     .bind(account_id)
     .bind(provider)
@@ -216,6 +224,17 @@ pub(crate) async fn update_vault_connection_data(
     .await
     .context("updating vault_connection connection_data")?;
     Ok(())
+}
+
+/// Purge expired vault sessions. Returns the number of rows deleted.
+pub(crate) async fn reap_expired_vault_sessions(pool: &PgPool) -> Result<u64> {
+    let result = sqlx::query(
+        r#"DELETE FROM vault_connections WHERE expires_at IS NOT NULL AND expires_at <= NOW()"#,
+    )
+    .execute(pool)
+    .await
+    .context("reaping expired vault sessions")?;
+    Ok(result.rows_affected())
 }
 
 /// Delete a vault connection for an account + provider pair.
