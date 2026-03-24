@@ -235,6 +235,17 @@ async fn handle_connection(
         .context("serving HTTP connection")
 }
 
+// ── Request ID ──────────────────────────────────────────────────────────
+
+/// Generate a random request ID (16 hex chars = 8 bytes of entropy).
+fn generate_request_id() -> String {
+    use ring::rand::{SecureRandom, SystemRandom};
+    let rng = SystemRandom::new();
+    let mut buf = [0u8; 8];
+    rng.fill(&mut buf).expect("generate random bytes for request ID");
+    hex::encode(buf)
+}
+
 // ── CONNECT handling ────────────────────────────────────────────────────
 
 /// Handle a CONNECT request: authenticate, resolve policy, then MITM or tunnel.
@@ -243,6 +254,14 @@ async fn handle_connect(
     peer_addr: SocketAddr,
     state: GatewayState,
 ) -> Result<Response<axum::body::Body>, anyhow::Error> {
+    // Generate or extract request ID for distributed tracing
+    let request_id = req
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(generate_request_id);
+
     let host = req
         .uri()
         .authority()
@@ -301,6 +320,7 @@ async fn handle_connect(
     }
 
     info!(
+        request_id = %request_id,
         peer = %peer_addr,
         host = %host,
         mode = if intercept { "mitm" } else { "tunnel" },
@@ -317,6 +337,7 @@ async fn handle_connect(
     let cache = Arc::clone(&state.cache);
     let agent_token_owned = agent_token.clone().unwrap_or_default();
 
+    let request_id_clone = request_id.clone();
     tokio::spawn(async move {
         match hyper::upgrade::on(req).await {
             Ok(upgraded) => {
@@ -330,6 +351,7 @@ async fn handle_connect(
                         policy_rules,
                         cache,
                         agent_token_owned,
+                        request_id_clone,
                     )
                     .await
                 } else {
@@ -363,6 +385,7 @@ async fn mitm(
     policy_rules: Vec<PolicyRule>,
     cache: Arc<dyn CacheStore>,
     agent_token: String,
+    request_id: String,
 ) -> Result<()> {
     let hostname = strip_port(host);
 
@@ -383,6 +406,7 @@ async fn mitm(
     let injection_rules = Arc::new(injection_rules);
     let policy_rules = Arc::new(policy_rules);
     let agent_token = Arc::new(agent_token);
+    let request_id = Arc::new(request_id);
     let io = TokioIo::new(tls_stream);
 
     http1::Builder::new()
@@ -397,8 +421,9 @@ async fn mitm(
                 let pol_rules = Arc::clone(&policy_rules);
                 let cache = Arc::clone(&cache);
                 let token = Arc::clone(&agent_token);
+                let rid = Arc::clone(&request_id);
                 async move {
-                    forward_request(req, &host, client, &inj_rules, &pol_rules, &*cache, &token)
+                    forward_request(req, &host, client, &inj_rules, &pol_rules, &*cache, &token, &rid)
                         .await
                 }
             }),
@@ -419,6 +444,7 @@ async fn forward_request(
     policy_rules: &[PolicyRule],
     cache: &dyn CacheStore,
     agent_token: &str,
+    request_id: &str,
 ) -> anyhow::Result<
     Response<
         Either<
@@ -495,6 +521,11 @@ async fn forward_request(
     // Apply injection rules matching this request path
     let injection_count = inject::apply_injections(&mut headers, &path, injection_rules);
 
+    // Propagate request ID to upstream
+    if let Ok(val) = HeaderValue::from_str(request_id) {
+        headers.insert("x-request-id", val);
+    }
+
     // Build upstream request with (possibly modified) headers
     let mut upstream = http_client.request(method.clone(), &url);
     for (name, value) in headers.iter() {
@@ -520,6 +551,7 @@ async fn forward_request(
         .unwrap_or("-");
 
     info!(
+        request_id = %request_id,
         method = %method,
         url = %url,
         status = %status.as_u16(),
@@ -540,6 +572,11 @@ async fn forward_request(
         if is_forwarded_header(name) {
             response.headers_mut().append(name.clone(), value.clone());
         }
+    }
+
+    // Include request ID in response for client-side correlation
+    if let Ok(val) = HeaderValue::from_str(request_id) {
+        response.headers_mut().insert("x-request-id", val);
     }
 
     Ok(response)

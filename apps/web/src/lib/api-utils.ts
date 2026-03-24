@@ -9,14 +9,21 @@ const STATUS_MAP: Record<ServiceErrorCode, number> = {
   FORBIDDEN: 403,
 };
 
-export const handleServiceError = (err: unknown): NextResponse => {
+/** Extract x-request-id from the request (set by middleware). */
+export const getRequestId = (request: Request): string =>
+  request.headers.get("x-request-id") ?? "-";
+
+export const handleServiceError = (
+  err: unknown,
+  requestId?: string,
+): NextResponse => {
   if (err instanceof ServiceError) {
     return NextResponse.json(
       { error: err.message },
       { status: STATUS_MAP[err.code] },
     );
   }
-  logger.error({ err }, "unhandled api error");
+  logger.error({ err, requestId }, "unhandled api error");
   return NextResponse.json({ error: "Internal server error" }, { status: 500 });
 };
 
