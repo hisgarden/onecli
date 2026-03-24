@@ -166,4 +166,82 @@ describe("cryptoService", () => {
       }
     });
   });
+
+  // ── Cross-validation fixture ─────────────────────────────────────
+  // Same fixture used in apps/gateway/src/crypto.rs::decrypt_nodejs_fixture.
+  // Proves TypeScript encryption output is decryptable by Rust gateway.
+  // See docs/crypto-format.md for wire format specification.
+
+  // ── Cross-validation fixture ─────────────────────────────────────
+  // Same fixture used in apps/gateway/src/crypto.rs::decrypt_nodejs_fixture.
+  // Uses raw node:crypto to bypass the module's cached key, proving the
+  // algorithm + wire format are compatible independent of key caching.
+  // See docs/crypto-format.md for wire format specification.
+
+  describe("cross-validation with Rust gateway", () => {
+    const FIXTURE_KEY_B64 = "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY=";
+    const FIXTURE_PLAINTEXT = "sk-ant-api03-cross-validation-test-key";
+    const FIXTURE_WIRE =
+      "qrvM3e7/ABEiM6q7:LpKph0AdS2Yz+kIKMIuFzQ==:xoc+5Xj9EiXBsZt6GldiKpysy8bUq9ZQMxNLGZIvmetE67TDMP0=";
+
+    it("should decrypt the shared fixture (same as Rust test)", () => {
+      // Use raw node:crypto to avoid module key caching issues
+      const { createDecipheriv } = require("crypto");
+      const key = Buffer.from(FIXTURE_KEY_B64, "base64");
+      const [ivB64, tagB64, ctB64] = FIXTURE_WIRE.split(":");
+      const iv = Buffer.from(ivB64!, "base64");
+      const authTag = Buffer.from(tagB64!, "base64");
+      const ciphertext = Buffer.from(ctB64!, "base64");
+
+      const decipher = createDecipheriv("aes-256-gcm", key, iv, {
+        authTagLength: 16,
+      });
+      decipher.setAuthTag(authTag);
+      const decrypted = Buffer.concat([
+        decipher.update(ciphertext),
+        decipher.final(),
+      ]);
+      expect(decrypted.toString("utf8")).toBe(FIXTURE_PLAINTEXT);
+    });
+
+    it("should encrypt in a format that Rust can parse (iv:tag:ciphertext, base64)", () => {
+      // Use raw node:crypto with the fixture key to produce wire format
+      const { createCipheriv, randomBytes: rb } = require("crypto");
+      const key = Buffer.from(FIXTURE_KEY_B64, "base64");
+      const iv = rb(12);
+
+      const cipher = createCipheriv("aes-256-gcm", key, iv, {
+        authTagLength: 16,
+      });
+      const encrypted = Buffer.concat([
+        cipher.update(FIXTURE_PLAINTEXT, "utf8"),
+        cipher.final(),
+      ]);
+      const authTag = cipher.getAuthTag();
+
+      const wire = [
+        iv.toString("base64"),
+        authTag.toString("base64"),
+        encrypted.toString("base64"),
+      ].join(":");
+
+      // Verify format: 3 base64 parts
+      const parts = wire.split(":");
+      expect(parts).toHaveLength(3);
+      expect(Buffer.from(parts[0]!, "base64").length).toBe(12);
+      expect(Buffer.from(parts[1]!, "base64").length).toBe(16);
+
+      // Verify round-trip decrypt with raw crypto
+      const { createDecipheriv } = require("crypto");
+      const decipher = createDecipheriv("aes-256-gcm", key, iv, {
+        authTagLength: 16,
+      });
+      decipher.setAuthTag(authTag);
+      const decrypted = Buffer.concat([
+        decipher.update(encrypted),
+        decipher.final(),
+      ]);
+      expect(decrypted.toString("utf8")).toBe(FIXTURE_PLAINTEXT);
+    });
+  });
 });

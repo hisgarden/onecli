@@ -62,6 +62,9 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: SBOM crypto audit
+        run: ./scripts/sbom-crypto-audit.sh
+
       # Checks that schema.prisma is fully covered by migrations.
       # Spins up a temporary Postgres only when Prisma files changed.
       - name: Check for Prisma changes
