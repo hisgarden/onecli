@@ -1,0 +1,25 @@
+{
+  "name": "@onecli/services",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./crypto": "./src/crypto.ts",
+    "./validations/*": "./src/validations/*.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "check-types": "bun x tsc --noEmit"
+  },
+  "dependencies": {
+    "@onecli/db": "workspace:*",
+    "pino": "^9.6.0",
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "pino-pretty": "^13.0.0",
+    "typescript": "5.9.2"
+  }
+}

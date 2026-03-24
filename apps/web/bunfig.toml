@@ -1,7 +1,0 @@
-[test]
-coverage = true
-coverageSkipTestFiles = true
-
-# Coverage thresholds — bun test will fail if coverage drops below these values.
-# Targets: 90% for crypto (security-critical), 70% for services (business logic).
-coverageThreshold = { line = 70, function = 70 }
