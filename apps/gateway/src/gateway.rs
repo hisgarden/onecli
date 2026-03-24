@@ -254,31 +254,33 @@ async fn handle_connect(
     // Extract agent token from Proxy-Authorization header.
     let agent_token = inject::extract_agent_token(&req).filter(|t| !t.is_empty());
 
-    let (mut intercept, mut injection_rules, policy_rules, account_id) = if let Some(ref token) =
-        agent_token
-    {
-        match connect::resolve(token, &hostname, &state.policy_engine, &*state.cache).await {
-            Ok(resp) => (
-                resp.intercept,
-                resp.injection_rules,
-                resp.policy_rules,
-                resp.account_id,
-            ),
-            Err(ConnectError::InvalidToken) => {
-                warn!(peer = %peer_addr, host = %host, "CONNECT rejected: invalid agent token");
-                return Ok(respond_407());
+    let (mut intercept, mut injection_rules, policy_rules, account_id, secret_mode, matched_secrets_count, agent_id) =
+        if let Some(ref token) = agent_token {
+            match connect::resolve(token, &hostname, &state.policy_engine, &*state.cache).await {
+                Ok(resp) => (
+                    resp.intercept,
+                    resp.injection_rules,
+                    resp.policy_rules,
+                    resp.account_id,
+                    resp.secret_mode,
+                    resp.matched_secrets_count,
+                    resp.agent_id,
+                ),
+                Err(ConnectError::InvalidToken) => {
+                    warn!(peer = %peer_addr, host = %host, "CONNECT rejected: invalid agent token");
+                    return Ok(respond_407());
+                }
+                Err(ConnectError::Internal(e)) => {
+                    warn!(peer = %peer_addr, host = %host, error = %e, "CONNECT rejected: internal error");
+                    let mut resp = Response::new(axum::body::Body::empty());
+                    *resp.status_mut() = StatusCode::BAD_GATEWAY;
+                    return Ok(resp);
+                }
             }
-            Err(ConnectError::Internal(e)) => {
-                warn!(peer = %peer_addr, host = %host, error = %e, "CONNECT rejected: internal error");
-                let mut resp = Response::new(axum::body::Body::empty());
-                *resp.status_mut() = StatusCode::BAD_GATEWAY;
-                return Ok(resp);
-            }
-        }
-    } else {
-        // No auth — plain tunnel (no MITM, no injection)
-        (false, vec![], vec![], None)
-    };
+        } else {
+            // No auth — plain tunnel (no MITM, no injection)
+            (false, vec![], vec![], None, None, 0, None)
+        };
 
     // Vault fallback: if no DB secrets matched, try vault providers for this user.
     if !intercept {
@@ -304,6 +306,9 @@ async fn handle_connect(
         mode = if intercept { "mitm" } else { "tunnel" },
         injection_count = injection_rules.len(),
         policy_count = policy_rules.len(),
+        agent_id = agent_id.as_deref().unwrap_or("-"),
+        secret_mode = secret_mode.as_deref().unwrap_or("-"),
+        matched_secrets = matched_secrets_count,
         "CONNECT"
     );
 

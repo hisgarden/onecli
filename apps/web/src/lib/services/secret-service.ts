@@ -1,6 +1,9 @@
 import { db, Prisma } from "@onecli/db";
 import { cryptoService } from "@/lib/crypto";
+import { logger } from "@/lib/logger";
 import { ServiceError } from "@/lib/services/errors";
+
+const audit = logger.child({ component: "audit", service: "secret" });
 import {
   detectAnthropicAuthMode,
   type CreateSecretInput,
@@ -109,6 +112,11 @@ export const createSecret = async (
     },
   });
 
+  audit.info(
+    { accountId, secretId: secret.id, type: input.type, hostPattern },
+    "secret created",
+  );
+
   return { ...secret, preview };
 };
 
@@ -121,6 +129,8 @@ export const deleteSecret = async (accountId: string, secretId: string) => {
   if (!secret) throw new ServiceError("NOT_FOUND", "Secret not found");
 
   await db.secret.delete({ where: { id: secretId } });
+
+  audit.info({ accountId, secretId }, "secret deleted");
 };
 
 export const updateSecret = async (

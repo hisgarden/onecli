@@ -1,7 +1,10 @@
 import { randomBytes } from "crypto";
 import { db, Prisma } from "@onecli/db";
+import { logger } from "@/lib/logger";
 import { ServiceError } from "@/lib/services/errors";
 import { IDENTIFIER_REGEX } from "@/lib/validations/agent";
+
+const audit = logger.child({ component: "audit", service: "agent" });
 
 export type SecretMode = "all" | "selective";
 
@@ -107,6 +110,11 @@ export const createAgent = async (
       });
     }
 
+    audit.info(
+      { accountId, agentId: agent.id, identifier: trimmedIdentifier },
+      "agent created",
+    );
+
     return agent;
   } catch (err) {
     if (
@@ -133,6 +141,8 @@ export const deleteAgent = async (accountId: string, agentId: string) => {
     throw new ServiceError("BAD_REQUEST", "Cannot delete the default agent");
 
   await db.agent.delete({ where: { id: agentId } });
+
+  audit.info({ accountId, agentId }, "agent deleted");
 };
 
 export const renameAgent = async (
@@ -206,15 +216,22 @@ export const updateAgentSecretMode = async (
 ) => {
   const agent = await db.agent.findFirst({
     where: { id: agentId, accountId },
-    select: { id: true },
+    select: { id: true, secretMode: true },
   });
 
   if (!agent) throw new ServiceError("NOT_FOUND", "Agent not found");
+
+  const previousMode = agent.secretMode;
 
   await db.agent.update({
     where: { id: agentId },
     data: { secretMode: mode },
   });
+
+  audit.info(
+    { accountId, agentId, previousMode, newMode: mode },
+    "agent secret_mode changed",
+  );
 };
 
 export const updateAgentSecrets = async (

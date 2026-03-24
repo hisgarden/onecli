@@ -24,6 +24,12 @@ pub(crate) struct ConnectResponse {
     pub injection_rules: Vec<InjectionRule>,
     pub policy_rules: Vec<PolicyRule>,
     pub account_id: Option<String>,
+    /// The agent's secret resolution mode ("all" or "selective").
+    pub secret_mode: Option<String>,
+    /// Number of secrets that matched the target host.
+    pub matched_secrets_count: usize,
+    /// Agent ID (database primary key) for audit logging.
+    pub agent_id: Option<String>,
 }
 
 /// Errors from the connect resolution.
@@ -116,8 +122,13 @@ impl PolicyEngine {
                 injection_rules: vec![],
                 policy_rules: vec![],
                 account_id: Some(agent.account_id.clone()),
+                secret_mode: Some(agent.secret_mode.clone()),
+                matched_secrets_count: 0,
+                agent_id: Some(agent.id.clone()),
             });
         }
+
+        let matched_secrets_count = matching_secrets.len();
 
         // 5. Decrypt and build injection rules
         let mut injection_rules = Vec::with_capacity(matching_secrets.len());
@@ -143,6 +154,9 @@ impl PolicyEngine {
             injection_rules,
             policy_rules: matching_policy_rules,
             account_id: Some(agent.account_id),
+            secret_mode: Some(agent.secret_mode),
+            matched_secrets_count,
+            agent_id: Some(agent.id),
         })
     }
 }
@@ -272,6 +286,9 @@ mod tests {
             injection_rules: vec![],
             policy_rules: vec![],
             account_id: None,
+            secret_mode: None,
+            matched_secrets_count: 0,
+            agent_id: None,
         };
 
         store
