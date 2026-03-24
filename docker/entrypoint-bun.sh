@@ -1,13 +1,12 @@
 #!/bin/sh
 set -e
 
-# Run database migrations
+# Ensure data directory is writable (volume may be root-owned)
+chown -R onecli:onecli /app/data 2>/dev/null || true
+
+# Run database migrations (lightweight psql runner — no Prisma CLI needed)
 echo "Running database migrations..."
-bunx prisma migrate deploy --schema packages/db/prisma/schema.prisma 2>&1 || {
-  echo "migrate deploy failed — bootstrapping baseline migration..."
-  bunx prisma migrate resolve --applied 0_init --schema packages/db/prisma/schema.prisma
-  bunx prisma migrate deploy --schema packages/db/prisma/schema.prisma
-}
+./migrate.sh
 
 # Auto-generate SECRET_ENCRYPTION_KEY for OSS if not provided.
 if [ "$NEXT_PUBLIC_EDITION" != "cloud" ] && [ -z "$SECRET_ENCRYPTION_KEY" ]; then
@@ -32,4 +31,4 @@ fi
 export AUTH_MODE
 
 echo "Starting onecli-api (auth_mode=$AUTH_MODE)..."
-exec bun run apps/api/src/index.ts
+exec su-exec onecli bun run apps/api/src/index.ts

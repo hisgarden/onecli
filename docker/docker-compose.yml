@@ -71,6 +71,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      api:
+        condition: service_started
     ports:
       - "10255:10255"
     environment:

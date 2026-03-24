@@ -33,6 +33,10 @@ RUN apk add --no-cache ca-certificates && \
 
 COPY --from=builder /build/target/release/onecli-gateway /usr/local/bin/onecli-gateway
 
+# Entrypoint wrapper: reads auto-generated SECRET_ENCRYPTION_KEY from shared volume
+COPY docker/entrypoint-gateway.sh /usr/local/bin/entrypoint-gateway.sh
+RUN chmod +x /usr/local/bin/entrypoint-gateway.sh
+
 RUN mkdir -p /app/data && chown gateway:gateway /app/data
 VOLUME ["/app/data"]
 
@@ -42,5 +46,5 @@ EXPOSE 10255
 HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://127.0.0.1:10255/healthz || exit 1
 
-ENTRYPOINT ["onecli-gateway"]
+ENTRYPOINT ["entrypoint-gateway.sh"]
 CMD ["--port", "10255", "--data-dir", "/app/data"]

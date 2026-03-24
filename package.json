@@ -1,6 +1,10 @@
 {
   "name": "onecli",
   "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "bun run dev:api & bun run dev:dashboard & wait",
     "dev:api": "cd apps/api && bun run dev",
