@@ -1,0 +1,46 @@
+# OneCLI Gateway — standalone Rust binary image
+# Build context: repo root (run with `docker build -f docker/Dockerfile.gateway .`)
+
+# ──────────────────────────────────────────────
+# Stage 1a: Install cargo-chef
+# ──────────────────────────────────────────────
+FROM rust:1-alpine AS chef
+RUN apk add --no-cache musl-dev pkgconfig openssl-dev openssl-libs-static && cargo install cargo-chef
+WORKDIR /build
+
+# ──────────────────────────────────────────────
+# Stage 1b: Prepare dependency recipe
+# ──────────────────────────────────────────────
+FROM chef AS planner
+COPY apps/gateway/ .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ──────────────────────────────────────────────
+# Stage 1c: Build Rust gateway
+# ──────────────────────────────────────────────
+FROM chef AS builder
+COPY --from=planner /build/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+COPY apps/gateway/ .
+RUN cargo build --release
+
+# ──────────────────────────────────────────────
+# Stage 2: Minimal runtime
+# ──────────────────────────────────────────────
+FROM alpine:3.21 AS runner
+RUN apk add --no-cache ca-certificates && \
+    adduser -D -u 1000 gateway
+
+COPY --from=builder /build/target/release/onecli-gateway /usr/local/bin/onecli-gateway
+
+RUN mkdir -p /app/data && chown gateway:gateway /app/data
+VOLUME ["/app/data"]
+
+USER gateway
+EXPOSE 10255
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:10255/healthz || exit 1
+
+ENTRYPOINT ["onecli-gateway"]
+CMD ["--port", "10255", "--data-dir", "/app/data"]

@@ -1,56 +1,29 @@
-# OneCLI — all-in-one Docker image (gateway + web) — quick start mode
-# Build context: repo root (run with `docker build -f docker/Dockerfile .`)
-#
-# For production, use the split images instead:
-#   docker build -f docker/Dockerfile.web -t onecli-web .
-#   docker build -f docker/Dockerfile.gateway -t onecli-gateway .
+# OneCLI Web Dashboard — standalone Next.js image
+# Build context: repo root (run with `docker build -f docker/Dockerfile.web .`)
 
 # ──────────────────────────────────────────────
-# Stage 1a: Install cargo-chef
-# ──────────────────────────────────────────────
-FROM rust:1-alpine AS chef
-RUN apk add --no-cache musl-dev pkgconfig openssl-dev openssl-libs-static && cargo install cargo-chef
-WORKDIR /build
-
-# ──────────────────────────────────────────────
-# Stage 1b: Prepare dependency recipe
-# ──────────────────────────────────────────────
-FROM chef AS planner
-COPY apps/gateway/ .
-RUN cargo chef prepare --recipe-path recipe.json
-
-# ──────────────────────────────────────────────
-# Stage 1c: Build Rust gateway
-# ──────────────────────────────────────────────
-FROM chef AS gateway-builder
-COPY --from=planner /build/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
-COPY apps/gateway/ .
-RUN cargo build --release
-
-# ──────────────────────────────────────────────
-# Stage 2: Prepare Node.js base
+# Stage 1: Prepare Node.js base
 # ──────────────────────────────────────────────
 FROM node:22-alpine AS base
 RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 WORKDIR /app
 
 # ──────────────────────────────────────────────
-# Stage 3: Prune monorepo to web + db packages
+# Stage 2: Prune monorepo to web + db packages
 # ──────────────────────────────────────────────
 FROM base AS pruner
 COPY . .
 RUN pnpm dlx turbo prune @onecli/web --docker
 
 # ──────────────────────────────────────────────
-# Stage 4: Install dependencies
+# Stage 3: Install dependencies
 # ──────────────────────────────────────────────
 FROM base AS deps
 COPY --from=pruner /app/out/json/ .
 RUN pnpm install --frozen-lockfile
 
 # ──────────────────────────────────────────────
-# Stage 5: Build Next.js app
+# Stage 4: Build Next.js app
 # ──────────────────────────────────────────────
 FROM base AS builder
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -64,7 +37,7 @@ RUN --mount=type=cache,target=/app/apps/web/.next/cache \
     pnpm build --filter=@onecli/web
 
 # ──────────────────────────────────────────────
-# Stage 6: Production runner
+# Stage 5: Production runner
 # ──────────────────────────────────────────────
 FROM node:22-alpine AS runner
 WORKDIR /app
@@ -77,9 +50,6 @@ ENV PORT=10254
 ENV HOSTNAME="0.0.0.0"
 ENV AUTH_TRUST_HOST=true
 ENV NEXTAUTH_URL=http://localhost:10254
-
-# Gateway binary from Rust build
-COPY --from=gateway-builder /build/target/release/onecli-gateway /usr/local/bin/onecli-gateway
 
 # Next.js standalone output
 COPY --from=builder --chown=node:node /app/apps/web/.next/standalone ./
@@ -95,18 +65,13 @@ RUN cd packages/db && npm init -y > /dev/null 2>&1 && \
     rm -rf /root/.npm /tmp/*
 
 # Entrypoint
-COPY --chown=node:node docker/entrypoint.sh ./entrypoint.sh
+COPY --chown=node:node docker/entrypoint-web.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
-# Data directory for CA certs and persistent state
-RUN mkdir -p /app/data && chown node:node /app/data
-VOLUME ["/app/data"]
-
 USER node
-
-EXPOSE 10254 10255
+EXPOSE 10254
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:10254/api/health && wget -qO- http://127.0.0.1:10255/healthz || exit 1
+  CMD wget -qO- http://127.0.0.1:10254/api/health || exit 1
 
 CMD ["./entrypoint.sh"]

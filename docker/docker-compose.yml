@@ -1,3 +1,8 @@
+# OneCLI — quick start (all-in-one container: web + gateway)
+#
+# For production deployments with independent scaling and resource isolation,
+# use docker-compose.production.yml instead.
+
 services:
   postgres:
     image: postgres:17-alpine
