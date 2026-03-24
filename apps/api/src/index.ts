@@ -6,6 +6,14 @@ import { db } from "@onecli/db";
 import { existsSync, readFileSync } from "fs";
 import { resolve } from "path";
 import { Google } from "arctic";
+import {
+  registry,
+  httpRequestsTotal,
+  httpRequestDuration,
+  authTotal,
+  csrfFailures,
+  sessionRefreshes,
+} from "./metrics";
 
 // Shared service layer (extracted to packages/services)
 import {
@@ -286,7 +294,18 @@ const app = new Elysia()
       }
     }
 
-    return { auth, authSource, jwtCsrf, requestId };
+    // Track auth outcome for metrics
+    if (auth) {
+      authTotal.inc({ source: authSource!, result: "success" });
+    }
+
+    return {
+      auth,
+      authSource,
+      jwtCsrf,
+      requestId,
+      requestStart: performance.now(),
+    };
   })
 
   // CSRF validation for state-changing requests using cookie auth.
@@ -305,20 +324,35 @@ const app = new Elysia()
     const cookieToken = cookie[CSRF_COOKIE_NAME]?.value as string | undefined;
 
     if (!headerToken || !cookieToken || headerToken !== cookieToken) {
+      csrfFailures.inc();
       set.status = 403;
       return { error: "CSRF token mismatch" };
     }
 
     // Also verify CSRF in JWT matches cookie (triple check)
     if (jwtCsrf && jwtCsrf !== cookieToken) {
+      csrfFailures.inc();
       set.status = 403;
       return { error: "CSRF token mismatch" };
     }
   })
 
   // Response header: x-request-id
-  .onAfterHandle(({ requestId, set }) => {
+  .onAfterHandle(({ request, requestId, requestStart, set }) => {
     set.headers["x-request-id"] = requestId;
+
+    // Record request metrics (skip /metrics endpoint to avoid self-instrumentation)
+    const url = new URL(request.url);
+    if (url.pathname !== "/metrics") {
+      const duration = (performance.now() - requestStart) / 1000;
+      const path = url.pathname.replace(/\/[0-9a-f-]{20,}/, "/:id");
+      httpRequestsTotal.inc({
+        method: request.method,
+        path,
+        status: String(set.status ?? 200),
+      });
+      httpRequestDuration.observe({ method: request.method, path }, duration);
+    }
   })
 
   // ── Health ──────────────────────────────────────────────────────────
@@ -326,6 +360,12 @@ const app = new Elysia()
     status: "ok",
     timestamp: new Date().toISOString(),
   }))
+
+  // ── Metrics ──────────────────────────────────────────────────────────
+  .get("/metrics", async ({ set }) => {
+    set.headers["content-type"] = registry.contentType;
+    return registry.metrics();
+  })
 
   // ── Gateway ─────────────────────────────────────────────────────────
   .get("/api/counts", async ({ auth }) => {
@@ -721,6 +761,7 @@ const app = new Elysia()
         csrfCookie(csrfToken),
       ].join(", ");
 
+      sessionRefreshes.inc();
       return { refreshed: true };
     },
   )

@@ -1,20 +1,32 @@
-# Gateway Metrics
+# Metrics
 
-The OneCLI gateway exposes Prometheus-format metrics at `GET /metrics` on the
-gateway port (default 10255). These can be scraped by VictoriaMetrics,
-Prometheus, or any compatible collector.
+OneCLI exposes Prometheus-format metrics from both the Elysia API (port 10254)
+and the Rust gateway (port 10255). Scrape with VictoriaMetrics, Prometheus, or
+any compatible collector.
 
-## Endpoint
+## Endpoints
 
 ```
-GET http://localhost:10255/metrics
+GET http://localhost:10254/metrics   # API metrics (prom-client)
+GET http://localhost:10255/metrics   # Gateway metrics (prometheus crate)
 Content-Type: text/plain; version=0.0.4; charset=utf-8
 ```
 
-No authentication required — the metrics endpoint is public. If the gateway
-runs behind a firewall, restrict access at the network level.
+No authentication required — both metrics endpoints are public. If running
+behind a firewall, restrict access at the network level.
 
-## Available Metrics
+## API Metrics (port 10254)
+
+| Metric                                | Type      | Labels                     | Description                               |
+| ------------------------------------- | --------- | -------------------------- | ----------------------------------------- |
+| `onecli_api_requests_total`           | counter   | `method`, `path`, `status` | Total HTTP requests handled by the API    |
+| `onecli_api_request_duration_seconds` | histogram | `method`, `path`           | API request round-trip latency            |
+| `onecli_api_auth_total`               | counter   | `source`, `result`         | Authentication attempts (by auth source)  |
+| `onecli_api_csrf_failures_total`      | counter   | —                          | CSRF validation failures                  |
+| `onecli_api_session_refreshes_total`  | counter   | —                          | Session token refreshes                   |
+| `process_*`, `nodejs_*`               | various   | —                          | Default process metrics (memory, GC, etc) |
+
+## Gateway Metrics (port 10255)
 
 | Metric                            | Type      | Labels                     | Description                                             |
 | --------------------------------- | --------- | -------------------------- | ------------------------------------------------------- |
@@ -58,10 +70,17 @@ Create `docker/prometheus.yml`:
 
 ```yaml
 scrape_configs:
+  - job_name: "onecli-api"
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["api:10254"]
+        labels:
+          instance: "onecli-api"
+
   - job_name: "onecli-gateway"
     scrape_interval: 15s
     static_configs:
-      - targets: ["app:10255"]
+      - targets: ["gateway:10255"]
         labels:
           instance: "onecli-gateway"
 ```
@@ -84,6 +103,19 @@ curl -s http://localhost:10255/metrics
 VictoriaMetrics supports PromQL. Example queries:
 
 ```promql
+# ── API queries ──────────────────────────────────────────
+
+# API request rate by path
+rate(onecli_api_requests_total[5m])
+
+# API P99 latency
+histogram_quantile(0.99, rate(onecli_api_request_duration_seconds_bucket[5m]))
+
+# CSRF failure rate
+rate(onecli_api_csrf_failures_total[5m])
+
+# ── Gateway queries ──────────────────────────────────────
+
 # Request rate per host (5m window)
 rate(onecli_requests_total[5m])
 
