@@ -3,8 +3,9 @@ import { cors } from "@elysiajs/cors";
 import { jwt } from "@elysiajs/jwt";
 import { staticPlugin } from "@elysiajs/static";
 import { db } from "@onecli/db";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { resolve } from "path";
+import { Google } from "arctic";
 
 // Shared service layer (framework-agnostic — lives in apps/web/src/lib for now)
 import {
@@ -35,11 +36,15 @@ import {
   updateProfile,
 } from "../../web/src/lib/services/user-service";
 import {
+  generateApiKey,
   getApiKey,
   regenerateApiKey,
 } from "../../web/src/lib/services/api-key-service";
+import { generateAccessToken } from "../../web/src/lib/services/agent-service";
 import { getGatewayCounts } from "../../web/src/lib/services/counts-service";
 import { ServiceError } from "../../web/src/lib/services/errors";
+import { cryptoService } from "../../web/src/lib/crypto";
+import { parseAnthropicMetadata } from "../../web/src/lib/validations/secret";
 
 // Zod schemas for validation
 import {
@@ -64,6 +69,22 @@ const PORT = Number(process.env.PORT ?? 10254);
 const CORS_ORIGIN = process.env.CORS_ORIGIN ?? "http://localhost:3000";
 const AUTH_MODE = process.env.AUTH_MODE ?? "local";
 const LOCAL_AUTH_ID = "local-user";
+const JWT_SECRET = process.env.NEXTAUTH_SECRET || "local-mode-fallback-unused";
+const DEFAULT_AGENT_NAME = "Default Agent";
+const DEMO_SECRET_NAME = "Demo Secret (httpbin)";
+const DEMO_SECRET_VALUE = "WELCOME-TO-ONECLI-SECRETS-ARE-WORKING";
+const GATEWAY_PORT = process.env.GATEWAY_PORT ?? "10255";
+const CA_CONTAINER_PATH = "/tmp/onecli-gateway-ca.pem";
+const IS_CLOUD = process.env.NEXT_PUBLIC_EDITION === "cloud";
+
+// Google OAuth via arctic (only initialized if credentials are set)
+const google = process.env.GOOGLE_CLIENT_ID
+  ? new Google(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET!,
+      `${process.env.NEXTAUTH_URL ?? `http://localhost:${PORT}`}/auth/callback`,
+    )
+  : null;
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -127,6 +148,32 @@ async function loadCaCertificate(): Promise<string | null> {
     }
   }
   return null;
+}
+
+/** Synchronous CA cert load (for container-config — same logic as loadCaCertificate). */
+function loadCaCertificateSync(): string | null {
+  const envCert = process.env.GATEWAY_CA_CERT?.trim();
+  if (envCert) return envCert;
+  if (IS_CLOUD) return null;
+  const pemFile = process.env.GATEWAY_CA_PEM_FILE;
+  const path =
+    pemFile ??
+    (existsSync("/app/data")
+      ? "/app/data/gateway/ca.pem"
+      : `${process.env.HOME}/.onecli/gateway/ca.pem`);
+  try {
+    const pem = readFileSync(path, "utf-8").trim();
+    return pem || null;
+  } catch {
+    return null;
+  }
+}
+
+function getGatewayHost(): string {
+  if (process.env.GATEWAY_HOST) return process.env.GATEWAY_HOST;
+  if (IS_CLOUD)
+    throw new Error("GATEWAY_HOST env var is required in cloud edition");
+  return "host.docker.internal";
 }
 
 // ── Error mapping ───────────────────────────────────────────────────────
@@ -374,6 +421,282 @@ const app = new Elysia()
   .post("/api/user/api-key/regenerate", async ({ auth }) => {
     requireAuth(auth);
     return regenerateApiKey(auth.userId, auth.accountId);
+  })
+
+  // ── Auth / Session Sync ─────────────────────────────────────────────
+  // Called on first login and dashboard mount. Upserts user, creates
+  // account + defaults. Replaces Next.js /api/auth/session.
+  .get("/api/auth/session", async ({ auth, jwt: jwtService, set }) => {
+    // In local mode, auth is already resolved from the derive block
+    if (AUTH_MODE === "local" && auth) {
+      const user = await db.user.findUnique({
+        where: { id: auth.userId },
+        select: { id: true, email: true, name: true },
+      });
+      return user ?? { error: "User not found" };
+    }
+
+    // OAuth mode — require auth
+    if (!auth) {
+      set.status = 401;
+      return { error: "Not authenticated" };
+    }
+
+    // Ensure account + defaults exist (idempotent)
+    let membership = await db.accountMember.findFirst({
+      where: { userId: auth.userId },
+      select: { accountId: true, account: { select: { demoSeeded: true } } },
+    });
+
+    if (!membership) {
+      const user = await db.user.findUnique({
+        where: { id: auth.userId },
+        select: { name: true },
+      });
+      const account = await db.account.create({
+        data: { name: user?.name },
+        select: { id: true, demoSeeded: true },
+      });
+      await db.accountMember.create({
+        data: { accountId: account.id, userId: auth.userId, role: "owner" },
+      });
+      await db.apiKey.create({
+        data: {
+          key: generateApiKey(),
+          userId: auth.userId,
+          accountId: account.id,
+        },
+      });
+      membership = {
+        accountId: account.id,
+        account: { demoSeeded: account.demoSeeded },
+      };
+    }
+
+    const accountId = membership.accountId;
+    const ops = [];
+
+    const hasDefault = await db.agent.findFirst({
+      where: { accountId, isDefault: true },
+      select: { id: true },
+    });
+    if (!hasDefault) {
+      ops.push(
+        db.agent.create({
+          data: {
+            name: DEFAULT_AGENT_NAME,
+            accessToken: generateAccessToken(),
+            isDefault: true,
+            accountId,
+          },
+        }),
+      );
+    }
+
+    if (!membership.account.demoSeeded) {
+      ops.push(
+        db.secret.create({
+          data: {
+            name: DEMO_SECRET_NAME,
+            type: "generic",
+            encryptedValue: await cryptoService.encrypt(DEMO_SECRET_VALUE),
+            hostPattern: "httpbin.org",
+            pathPattern: "/anything/*",
+            injectionConfig: {
+              headerName: "Authorization",
+              valueFormat: "Bearer {value}",
+            },
+            accountId,
+          },
+        }),
+        db.account.update({
+          where: { id: accountId },
+          data: { demoSeeded: true },
+        }),
+      );
+    }
+
+    if (ops.length > 0) await db.$transaction(ops);
+
+    const user = await db.user.findUnique({
+      where: { id: auth.userId },
+      select: { id: true, email: true, name: true },
+    });
+    return user;
+  })
+
+  // ── Google OAuth ────────────────────────────────────────────────────
+  .get("/auth/login", async ({ set }) => {
+    if (!google) {
+      set.status = 503;
+      return {
+        error:
+          "OAuth not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.",
+      };
+    }
+    const state = crypto.randomUUID();
+    const codeVerifier = crypto.randomUUID() + crypto.randomUUID();
+    const url = google.createAuthorizationURL(state, codeVerifier, [
+      "openid",
+      "email",
+      "profile",
+    ]);
+    // Store state + verifier in a short-lived cookie
+    set.headers["set-cookie"] = [
+      `oauth_state=${state}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`,
+      `oauth_verifier=${codeVerifier}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`,
+    ].join(", ");
+    set.redirect = url.toString();
+  })
+
+  .get("/auth/callback", async ({ query, cookie, jwt: jwtService, set }) => {
+    if (!google) {
+      set.status = 503;
+      return { error: "OAuth not configured" };
+    }
+
+    const { code, state } = query as { code?: string; state?: string };
+    const savedState = cookie.oauth_state?.value as string | undefined;
+    const codeVerifier = cookie.oauth_verifier?.value as string | undefined;
+
+    if (!code || !state || state !== savedState || !codeVerifier) {
+      set.status = 400;
+      return { error: "Invalid OAuth callback" };
+    }
+
+    const tokens = await google.validateAuthorizationCode(code, codeVerifier);
+    const accessToken = tokens.accessToken();
+
+    // Fetch user info from Google
+    const userInfoResp = await fetch(
+      "https://openidconnect.googleapis.com/v1/userinfo",
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      },
+    );
+    const userInfo = (await userInfoResp.json()) as {
+      sub: string;
+      email: string;
+      name?: string;
+    };
+
+    // Upsert user
+    const user = await db.user.upsert({
+      where: { email: userInfo.email },
+      create: {
+        externalAuthId: userInfo.sub,
+        email: userInfo.email,
+        name: userInfo.name,
+      },
+      update: { externalAuthId: userInfo.sub, name: userInfo.name },
+      select: { id: true, email: true, name: true },
+    });
+
+    // Issue JWT
+    const token = await jwtService.sign({
+      sub: user.id,
+      authId: userInfo.sub,
+      email: user.email,
+    });
+    const isSecure = process.env.NODE_ENV === "production";
+    const cookieName = isSecure
+      ? "__Secure-authjs.session-token"
+      : "authjs.session-token";
+
+    // Clear OAuth cookies, set session cookie
+    set.headers["set-cookie"] = [
+      `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Lax${isSecure ? "; Secure" : ""}; Max-Age=86400`,
+      `oauth_state=; Path=/; Max-Age=0`,
+      `oauth_verifier=; Path=/; Max-Age=0`,
+    ].join(", ");
+
+    set.redirect = "/overview";
+  })
+
+  .get("/auth/signout", async ({ set }) => {
+    const isSecure = process.env.NODE_ENV === "production";
+    const cookieName = isSecure
+      ? "__Secure-authjs.session-token"
+      : "authjs.session-token";
+    set.headers["set-cookie"] = `${cookieName}=; Path=/; Max-Age=0`;
+    set.redirect = "/auth/login";
+  })
+
+  // ── Container Config ────────────────────────────────────────────────
+  .get("/api/container-config", async ({ auth, query, set }) => {
+    requireAuth(auth);
+
+    const agentIdentifier = (query as Record<string, string>).agent;
+
+    let agent = agentIdentifier
+      ? await db.agent.findFirst({
+          where: { accountId: auth.accountId, identifier: agentIdentifier },
+          select: { id: true, accessToken: true, secretMode: true },
+        })
+      : await db.agent.findFirst({
+          where: { accountId: auth.accountId, isDefault: true },
+          select: { id: true, accessToken: true, secretMode: true },
+        });
+
+    if (!agent && agentIdentifier) {
+      set.status = 404;
+      return { error: "Agent with the given identifier not found." };
+    }
+
+    if (!agent) {
+      agent = await db.agent.create({
+        data: {
+          name: DEFAULT_AGENT_NAME,
+          accessToken: generateAccessToken(),
+          isDefault: true,
+          accountId: auth.accountId,
+        },
+        select: { id: true, accessToken: true, secretMode: true },
+      });
+    }
+
+    const gatewayHost = getGatewayHost();
+    const gatewayUrl = `http://x:${agent.accessToken}@${gatewayHost}:${GATEWAY_PORT}`;
+
+    const caCertificate = loadCaCertificateSync();
+    if (!caCertificate) {
+      set.status = 503;
+      return {
+        error: "CA certificate not available. Start the gateway first.",
+      };
+    }
+
+    const anthropicSecret =
+      agent.secretMode === "selective"
+        ? await db.secret.findFirst({
+            where: {
+              type: "anthropic",
+              agentSecrets: { some: { agentId: agent.id } },
+            },
+            select: { metadata: true },
+          })
+        : await db.secret.findFirst({
+            where: { accountId: auth.accountId, type: "anthropic" },
+            select: { metadata: true },
+          });
+
+    const meta = parseAnthropicMetadata(anthropicSecret?.metadata);
+    const authEnv: Record<string, string> =
+      meta?.authMode === "oauth"
+        ? { CLAUDE_CODE_OAUTH_TOKEN: "placeholder" }
+        : { ANTHROPIC_API_KEY: "placeholder" };
+
+    return {
+      env: {
+        HTTPS_PROXY: gatewayUrl,
+        HTTP_PROXY: gatewayUrl,
+        NODE_EXTRA_CA_CERTS: CA_CONTAINER_PATH,
+        NODE_USE_ENV_PROXY: "1",
+        ...authEnv,
+      },
+      caCertificate,
+      caCertificateContainerPath: CA_CONTAINER_PATH,
+    };
   });
 
 // ── Static SPA serving (production) ──────────────────────────────────
