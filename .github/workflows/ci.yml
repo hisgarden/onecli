@@ -54,10 +54,13 @@ jobs:
       - name: Build
         run: pnpm build --filter='!@onecli/gateway'
 
-      - name: Unit tests (web)
+      - name: Unit tests (web — legacy)
         run: cd apps/web && bun test --coverage
         env:
           SECRET_ENCRYPTION_KEY: cSxLSnUovImyO3rblvXNj9kVakwVYTYBZVQTK3nJY0g=
+
+      - name: Build dashboard (Vite SPA)
+        run: cd apps/dashboard && bun run build
 
       - name: Test
         run: pnpm test

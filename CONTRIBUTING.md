@@ -18,7 +18,21 @@ cd onecli
 pnpm install
 cp .env.example .env
 pnpm db:generate
-pnpm dev
+pnpm db:up          # Start PostgreSQL
+pnpm db:migrate     # Apply migrations
+```
+
+**Bun workflow (recommended):**
+
+```bash
+pnpm dev:api         # Elysia API on port 10254
+pnpm dev:dashboard   # Vite SPA on port 3000
+```
+
+**Legacy workflow:**
+
+```bash
+pnpm dev             # Next.js + gateway via Turborepo
 ```
 
 See the [README](README.md) for more details on prerequisites and configuration.

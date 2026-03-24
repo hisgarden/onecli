@@ -70,14 +70,17 @@ Open **http://localhost:10254**, create an agent, add your secrets, and point yo
 
 ```
 apps/
-  web/            # Next.js app (dashboard + API, port 10254)
+  api/            # Elysia API (Bun, port 10254) — new
+  dashboard/      # React SPA (Vite, port 3000 dev) — new
+  web/            # Next.js app (legacy, being replaced)
   gateway/        # Rust gateway (credential injection, port 10255)
 packages/
   db/             # Prisma ORM + migrations
   ui/             # Shared UI components (shadcn/ui)
 docker/
-  Dockerfile      # App image (gateway + web)
-  docker-compose.yml
+  Dockerfile      # All-in-one image (gateway + web) — quick start
+  Dockerfile.bun  # Bun-based image (API + SPA) — recommended
+  Dockerfile.gateway  # Standalone gateway image
 ```
 
 ## Local Development
@@ -104,16 +107,21 @@ Dashboard at **http://localhost:10254**, gateway at **http://localhost:10255**.
 
 ### Commands
 
-| Command            | Description                     |
-| ------------------ | ------------------------------- |
-| `pnpm dev`         | Start web + gateway in dev mode |
-| `pnpm build`       | Production build                |
-| `pnpm check`       | Lint + types + format           |
-| `pnpm db:up`       | Start PostgreSQL (Docker)       |
-| `pnpm db:down`     | Stop PostgreSQL                 |
-| `pnpm db:generate` | Generate Prisma client          |
-| `pnpm db:migrate`  | Run database migrations         |
-| `pnpm db:studio`   | Open Prisma Studio              |
+| Command              | Description                            |
+| -------------------- | -------------------------------------- |
+| `pnpm dev`           | Start legacy web + gateway in dev mode |
+| `pnpm dev:api`       | Start Elysia API (Bun, port 10254)     |
+| `pnpm dev:dashboard` | Start Vite dashboard (port 3000)       |
+| `pnpm build`         | Production build                       |
+| `pnpm check`         | Lint + types + format                  |
+| `pnpm db:up`         | Start PostgreSQL (Docker)              |
+| `pnpm db:down`       | Stop PostgreSQL                        |
+| `pnpm db:generate`   | Generate Prisma client                 |
+| `pnpm db:migrate`    | Run database migrations                |
+| `pnpm db:studio`     | Open Prisma Studio                     |
+| `pnpm db:backup`     | Back up database to gzip               |
+| `pnpm db:restore`    | Restore database from backup           |
+| `pnpm test:unit`     | Run unit tests (bun:test)              |
 
 ## Configuration
 
