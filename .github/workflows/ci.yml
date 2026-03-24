@@ -37,6 +37,9 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -50,6 +53,11 @@ jobs:
       # Release builds only happen in publish.yml for Docker images.
       - name: Build
         run: pnpm build --filter='!@onecli/gateway'
+
+      - name: Unit tests (web)
+        run: cd apps/web && bun test --coverage
+        env:
+          SECRET_ENCRYPTION_KEY: cSxLSnUovImyO3rblvXNj9kVakwVYTYBZVQTK3nJY0g=
 
       - name: Test
         run: pnpm test
@@ -76,3 +84,57 @@ jobs:
             --exit-code; EXIT_CODE=$?
           docker rm -f shadow-db
           exit $EXIT_CODE
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: ci
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: onecli_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://test:test@localhost:5433/onecli_test
+      SECRET_ENCRYPTION_KEY: cSxLSnUovImyO3rblvXNj9kVakwVYTYBZVQTK3nJY0g=
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/gateway -> target
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @onecli/db generate
+
+      - name: Run Prisma migrations
+        run: pnpm --filter @onecli/db prisma migrate deploy
+
+      - name: Gateway integration tests
+        run: cd apps/gateway && cargo test -- --test-threads=1

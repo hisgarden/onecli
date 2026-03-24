@@ -1,0 +1,28 @@
+# Test profile — ephemeral Postgres for integration testing.
+# Usage: docker compose -f docker/docker-compose.test.yml up -d --wait
+#        DATABASE_URL=postgresql://test:test@localhost:5433/onecli_test cargo test
+#        docker compose -f docker/docker-compose.test.yml down -v
+
+services:
+  postgres-test:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: onecli_test
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test"]
+      interval: 2s
+      timeout: 2s
+      start_period: 5s
+      retries: 10
+    networks:
+      - onecli-test
+
+networks:
+  onecli-test:
+    driver: bridge
