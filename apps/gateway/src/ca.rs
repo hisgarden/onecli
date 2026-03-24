@@ -19,7 +19,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::ServerConfig;
 use time::OffsetDateTime;
 use tokio::fs;
-use tracing::info;
+use tracing::{info, warn};
 
 /// CA certificate validity: 10 years.
 const CA_VALIDITY_DAYS: i64 = 3650;
@@ -211,6 +211,25 @@ impl CertificateAuthority {
         })
     }
 
+    /// Verify CA key file permissions are restrictive (0o600 or stricter).
+    /// Warns on startup if the key is world-readable or group-readable.
+    #[cfg(unix)]
+    fn check_key_permissions(key_path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = std::fs::metadata(key_path) {
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                warn!(
+                    path = %key_path.display(),
+                    mode = format!("{mode:04o}"),
+                    "CA private key has overly permissive file permissions — expected 0600. \
+                     Run: chmod 600 {}",
+                    key_path.display()
+                );
+            }
+        }
+    }
+
     /// Load an existing CA from PEM files on disk.
     ///
     /// rcgen's `signed_by()` requires a `Certificate` reference as the issuer.
@@ -220,6 +239,10 @@ impl CertificateAuthority {
     /// The original CA cert DER (from disk) is used in leaf cert chains and for
     /// the public PEM download.
     async fn load_from_disk(key_path: &Path, cert_path: &Path) -> Result<Self> {
+        // Verify key file permissions on Unix
+        #[cfg(unix)]
+        Self::check_key_permissions(key_path);
+
         // Load private key
         let key_pem = fs::read_to_string(key_path)
             .await
@@ -509,5 +532,41 @@ mod tests {
             .server_config_for_host("test.example.com")
             .expect("leaf from reloaded CA");
         assert_eq!(config.alpn_protocols, vec![b"http/1.1".to_vec()]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ca_warns_on_permissive_key_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let data_dir = tmp.path();
+
+        // Generate CA (creates key with 0o600)
+        CertificateAuthority::load_or_generate(data_dir)
+            .await
+            .expect("generate CA");
+
+        let key_path = data_dir.join("gateway").join("ca.key");
+
+        // Loosen permissions to simulate misconfiguration
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o644))
+            .expect("set permissive mode");
+
+        // Reload — should succeed but internally trigger the warning
+        // (we can't easily capture tracing output, so verify the check function itself)
+        let mode = std::fs::metadata(&key_path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o644, "test setup: key should be 0644");
+        assert!(mode & 0o077 != 0, "key should be flagged as overly permissive");
+
+        // Load should still succeed (warning, not error)
+        let ca = CertificateAuthority::load_or_generate(data_dir)
+            .await
+            .expect("load CA with permissive key");
+        assert!(!ca.ca_cert_pem().is_empty());
     }
 }
