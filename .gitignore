@@ -47,6 +47,9 @@ data/
 # CDK
 cdk.out
 
+# Backups
+backups/
+
 # Rust
 apps/gateway/target/
 

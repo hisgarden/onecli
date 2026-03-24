@@ -21,6 +21,8 @@
     "db:push": "dotenv -e .env -- pnpm --filter @onecli/db prisma db push",
     "db:migrate": "dotenv -e .env -- pnpm --filter @onecli/db db:migrate",
     "db:studio": "dotenv -e .env -- pnpm --filter @onecli/db prisma studio",
+    "db:backup": "./scripts/db-backup.sh",
+    "db:restore": "./scripts/db-restore.sh",
     "test": "turbo run test",
     "test:unit": "cd apps/web && bun test",
     "test:integration": "./scripts/test-integration.sh",
