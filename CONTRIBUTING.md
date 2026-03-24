@@ -47,6 +47,38 @@ pnpm check     # Lint + types + format
 
 Running these before you create the PR will help reduce back and forth during review.
 
+## Database Schema Changes
+
+When modifying the Prisma schema (`packages/db/prisma/schema.prisma`), follow this workflow:
+
+1. **Edit the schema** — add/modify models in `schema.prisma`
+2. **Generate a migration**:
+   ```bash
+   pnpm --filter @onecli/db prisma migrate dev --name <description>
+   ```
+   This creates a timestamped migration in `packages/db/prisma/migrations/`.
+3. **Review the SQL** — open the generated `migration.sql` and verify it does what you expect. Watch for unintended drops, renames, or data loss.
+4. **Regenerate the Prisma client**:
+   ```bash
+   pnpm db:generate
+   ```
+5. **Commit both** the schema change and the migration together.
+
+### Migration Naming Convention
+
+Migrations follow the format: `YYYYMMDDHHMMSS_snake_case_description`
+
+Examples:
+
+- `20260324200000_add_vault_session_ttl`
+- `20260319084027_add_policy_rules`
+
+CI enforces this via `scripts/lint-migrations.sh`.
+
+### Schema Drift Check
+
+CI runs `prisma migrate diff` on every PR that touches `packages/db/prisma/` to ensure the schema and migrations are in sync. If you modify `schema.prisma` without generating a migration, the CI check will fail.
+
 ## License
 
 By contributing to OneCLI, you agree that your contributions will be licensed under the [Apache License 2.0](LICENSE).
