@@ -9,6 +9,10 @@ declare module "next-auth" {
   }
 }
 
+const isProduction = process.env.NODE_ENV === "production";
+const useSecureCookies =
+  isProduction || process.env.NEXTAUTH_URL?.startsWith("https://");
+
 export const { auth, handlers } = NextAuth({
   providers: process.env.GOOGLE_CLIENT_ID
     ? [
@@ -22,6 +26,21 @@ export const { auth, handlers } = NextAuth({
   secret: process.env.NEXTAUTH_SECRET || "local-mode-fallback-unused",
   pages: {
     signIn: "/auth/login",
+  },
+  // Explicit cookie flags — defense-in-depth (NextAuth defaults are already
+  // secure, but making them explicit prevents silent regressions on upgrade).
+  cookies: {
+    sessionToken: {
+      name: useSecureCookies
+        ? "__Secure-authjs.session-token"
+        : "authjs.session-token",
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: !!useSecureCookies,
+      },
+    },
   },
   callbacks: {
     jwt({ token, account }) {
