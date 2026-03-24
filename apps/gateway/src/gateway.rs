@@ -78,6 +78,40 @@ impl GatewayServer {
         Self { state, port }
     }
 
+    /// Parse CORS allowed origins from `CORS_ORIGIN` env var.
+    /// Supports comma-separated origins (e.g., "http://localhost:10254,https://app.onecli.dev").
+    /// Falls back to `http://localhost:10254` if not set.
+    fn parse_cors_origins() -> tower_http::cors::AllowOrigin {
+        let raw = std::env::var("CORS_ORIGIN")
+            .unwrap_or_else(|_| "http://localhost:10254".to_string());
+
+        let origins: Vec<HeaderValue> = raw
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    return None;
+                }
+                match trimmed.parse::<HeaderValue>() {
+                    Ok(val) => Some(val),
+                    Err(e) => {
+                        warn!(origin = trimmed, error = %e, "ignoring invalid CORS origin");
+                        None
+                    }
+                }
+            })
+            .collect();
+
+        if origins.is_empty() {
+            warn!("no valid CORS origins configured — falling back to localhost:10254");
+            tower_http::cors::AllowOrigin::exact("http://localhost:10254".parse().unwrap())
+        } else if origins.len() == 1 {
+            tower_http::cors::AllowOrigin::exact(origins.into_iter().next().unwrap())
+        } else {
+            tower_http::cors::AllowOrigin::list(origins)
+        }
+    }
+
     /// Start the gateway TCP listener. Runs forever.
     pub async fn run(&self) -> Result<()> {
         let addr = SocketAddr::from(([0, 0, 0, 0], self.port));
@@ -88,9 +122,12 @@ impl GatewayServer {
         info!(addr = %addr, "listening for connections");
 
         // CORS configuration for browser → gateway requests.
-        // credentials: true requires explicit headers/methods (not wildcard *).
+        // Restrict origin to the dashboard URL only (configurable via CORS_ORIGIN).
+        // Mirroring the request origin (AllowOrigin::mirror_request) is effectively
+        // a wildcard with credentials — a CORS misconfiguration (CWE-942).
+        let cors_origins = Self::parse_cors_origins();
         let cors_layer = CorsLayer::new()
-            .allow_origin(tower_http::cors::AllowOrigin::mirror_request())
+            .allow_origin(cors_origins)
             .allow_headers([
                 hyper::header::CONTENT_TYPE,
                 hyper::header::AUTHORIZATION,

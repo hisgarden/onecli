@@ -256,3 +256,99 @@ fn ca_persists_across_restarts() {
     // Same CA cert across restarts
     assert_eq!(cert_content_1, cert_content_2, "CA cert should persist");
 }
+
+#[test]
+fn cors_allowed_origin_returns_headers() {
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let db_url = std::env::var("DATABASE_URL").unwrap_or_default();
+    if db_url.is_empty() {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    }
+    let key = std::env::var("SECRET_ENCRYPTION_KEY").unwrap_or_default();
+    if key.is_empty() {
+        eprintln!("skipping: SECRET_ENCRYPTION_KEY not set");
+        return;
+    }
+
+    let allowed_origin = "http://localhost:10254";
+    let (port, mut child) = start_gateway_with_db(
+        tmp.path(),
+        &db_url,
+        &key,
+        &[("CORS_ORIGIN", allowed_origin)],
+    );
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{port}")).expect("connect");
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+
+    // Preflight request from allowed origin
+    let req = format!(
+        "OPTIONS /healthz HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: {allowed_origin}\r\nAccess-Control-Request-Method: GET\r\n\r\n"
+    );
+    stream.write_all(req.as_bytes()).expect("send OPTIONS");
+
+    let mut buf = vec![0u8; 2048];
+    let n = stream.read(&mut buf).expect("read response");
+    let resp = String::from_utf8_lossy(&buf[..n]);
+
+    assert!(
+        resp.contains("access-control-allow-origin") || resp.contains("Access-Control-Allow-Origin"),
+        "expected CORS allow-origin header in response, got: {resp}"
+    );
+    assert!(
+        resp.contains(allowed_origin),
+        "expected origin {allowed_origin} in CORS header, got: {resp}"
+    );
+
+    child.kill().ok();
+    child.wait().ok();
+}
+
+#[test]
+fn cors_disallowed_origin_no_allow_header() {
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let db_url = std::env::var("DATABASE_URL").unwrap_or_default();
+    if db_url.is_empty() {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    }
+    let key = std::env::var("SECRET_ENCRYPTION_KEY").unwrap_or_default();
+    if key.is_empty() {
+        eprintln!("skipping: SECRET_ENCRYPTION_KEY not set");
+        return;
+    }
+
+    let allowed_origin = "http://localhost:10254";
+    let evil_origin = "http://evil.example.com";
+    let (port, mut child) = start_gateway_with_db(
+        tmp.path(),
+        &db_url,
+        &key,
+        &[("CORS_ORIGIN", allowed_origin)],
+    );
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{port}")).expect("connect");
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+
+    // Preflight request from disallowed origin
+    let req = format!(
+        "OPTIONS /healthz HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: {evil_origin}\r\nAccess-Control-Request-Method: GET\r\n\r\n"
+    );
+    stream.write_all(req.as_bytes()).expect("send OPTIONS");
+
+    let mut buf = vec![0u8; 2048];
+    let n = stream.read(&mut buf).expect("read response");
+    let resp = String::from_utf8_lossy(&buf[..n]);
+
+    // The response should NOT contain the evil origin in access-control-allow-origin
+    let resp_lower = resp.to_lowercase();
+    let has_evil_origin = resp_lower.contains(&evil_origin.to_lowercase());
+    assert!(
+        !has_evil_origin,
+        "CORS should NOT allow evil origin {evil_origin}, got: {resp}"
+    );
+
+    child.kill().ok();
+    child.wait().ok();
+}

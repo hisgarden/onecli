@@ -54,7 +54,8 @@
         "REDIS_PORT",
         "REDIS_PASSWORD",
         "REDIS_TLS",
-        "COGNITO_USER_POOL_ID"
+        "COGNITO_USER_POOL_ID",
+        "CORS_ORIGIN"
       ]
     },
     "@onecli/gateway#check": {
