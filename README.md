@@ -61,34 +61,33 @@ Open **http://localhost:10254**, create an agent, add your secrets, and point yo
 - **Encrypted secret storage**: AES-256-GCM encryption at rest, decrypted only at request time
 - **Host & path matching**: route secrets to the right API endpoints with pattern matching
 - **Multi-agent support**: each agent gets its own access token with scoped permissions
-- **Easy setup**: `docker compose -f docker/docker-compose.yml up` starts everything (app + PostgreSQL)
+- **Easy setup**: `docker compose -f docker/docker-compose.yml up` starts everything
 - **Two auth modes**: single-user (no login) for local use, or Google OAuth for teams
 - **Rust gateway**: fast, memory-safe HTTP gateway with MITM interception for HTTPS
+- **Prometheus metrics**: API + gateway expose `/metrics` for VictoriaMetrics/Prometheus
 - **[Vault integration](docs/vault-integration.md)**: connect Bitwarden (or other password managers) for on-demand credential injection without storing secrets on the server
 
 ## Project Structure
 
 ```
 apps/
-  api/            # Elysia API (Bun, port 10254) — new
-  dashboard/      # React SPA (Vite, port 3000 dev) — new
-  web/            # Next.js app (legacy, being replaced)
+  api/            # Elysia API (Bun, port 10254) — serves API + React SPA
+  dashboard/      # React SPA (Vite, port 3000 dev)
   gateway/        # Rust gateway (credential injection, port 10255)
 packages/
+  services/       # Shared service layer (business logic, validations, crypto)
   db/             # Prisma ORM + migrations
   ui/             # Shared UI components (shadcn/ui)
 docker/
-  Dockerfile      # All-in-one image (gateway + web) — quick start
-  Dockerfile.bun  # Bun-based image (API + SPA) — recommended
-  Dockerfile.gateway  # Standalone gateway image
+  Dockerfile.bun      # API + SPA image (~80MB)
+  Dockerfile.gateway  # Standalone gateway image (~20MB)
 ```
 
 ## Local Development
 
 ### Prerequisites
 
-- **[mise](https://mise.jdx.dev)** (installs Node.js, pnpm, and other tools)
-- **Rust** (for the gateway)
+- **[mise](https://mise.jdx.dev)** (installs Bun, Node.js, pnpm, Rust)
 - **Docker** (for PostgreSQL)
 
 ### Setup
@@ -107,21 +106,22 @@ Dashboard at **http://localhost:10254**, gateway at **http://localhost:10255**.
 
 ### Commands
 
-| Command              | Description                            |
-| -------------------- | -------------------------------------- |
-| `pnpm dev`           | Start legacy web + gateway in dev mode |
-| `pnpm dev:api`       | Start Elysia API (Bun, port 10254)     |
-| `pnpm dev:dashboard` | Start Vite dashboard (port 3000)       |
-| `pnpm build`         | Production build                       |
-| `pnpm check`         | Lint + types + format                  |
-| `pnpm db:up`         | Start PostgreSQL (Docker)              |
-| `pnpm db:down`       | Stop PostgreSQL                        |
-| `pnpm db:generate`   | Generate Prisma client                 |
-| `pnpm db:migrate`    | Run database migrations                |
-| `pnpm db:studio`     | Open Prisma Studio                     |
-| `pnpm db:backup`     | Back up database to gzip               |
-| `pnpm db:restore`    | Restore database from backup           |
-| `pnpm test:unit`     | Run unit tests (bun:test)              |
+| Command              | Description                        |
+| -------------------- | ---------------------------------- |
+| `pnpm dev`           | Start API + dashboard in dev mode  |
+| `pnpm dev:api`       | Start Elysia API (Bun, port 10254) |
+| `pnpm dev:dashboard` | Start Vite dashboard (port 3000)   |
+| `pnpm build`         | Build dashboard SPA                |
+| `pnpm check`         | Type check + format check          |
+| `pnpm db:up`         | Start PostgreSQL (Docker)          |
+| `pnpm db:down`       | Stop PostgreSQL                    |
+| `pnpm db:generate`   | Generate Prisma client             |
+| `pnpm db:migrate`    | Run database migrations            |
+| `pnpm db:studio`     | Open Prisma Studio                 |
+| `pnpm db:backup`     | Back up database to gzip           |
+| `pnpm db:restore`    | Restore database from backup       |
+| `pnpm test`          | Run all tests (services + API)     |
+| `pnpm test:unit`     | Run service layer unit tests       |
 
 ## Configuration
 

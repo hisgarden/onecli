@@ -7,19 +7,35 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  REPO: ${{ github.repository }}
 
 jobs:
   build:
     strategy:
       matrix:
         include:
-          - runner: ubuntu-latest
+          # API image (Bun + Elysia + SPA)
+          - image: api
+            dockerfile: docker/Dockerfile.bun
+            runner: ubuntu-latest
             platform: linux/amd64
-            suffix: amd64
-          - runner: ubuntu-24.04-arm
+            suffix: api-amd64
+          - image: api
+            dockerfile: docker/Dockerfile.bun
+            runner: ubuntu-24.04-arm
             platform: linux/arm64
-            suffix: arm64
+            suffix: api-arm64
+          # Gateway image (Rust binary)
+          - image: gateway
+            dockerfile: docker/Dockerfile.gateway
+            runner: ubuntu-latest
+            platform: linux/amd64
+            suffix: gateway-amd64
+          - image: gateway
+            dockerfile: docker/Dockerfile.gateway
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            suffix: gateway-arm64
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -43,35 +59,38 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.REPO }}-${{ matrix.image }}
 
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: docker/Dockerfile
+          file: ${{ matrix.dockerfile }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.REPO }}-${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.suffix }}
           cache-to: type=gha,mode=max,scope=${{ matrix.suffix }}
 
       - name: Export digest
         run: |
-          mkdir -p /tmp/digests
+          mkdir -p /tmp/digests/${{ matrix.image }}
           digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
+          touch "/tmp/digests/${{ matrix.image }}/${digest#sha256:}"
 
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
           name: digest-${{ matrix.suffix }}
-          path: /tmp/digests/*
+          path: /tmp/digests/${{ matrix.image }}/*
           if-no-files-found: error
           retention-days: 1
 
   merge:
+    strategy:
+      matrix:
+        image: [api, gateway]
     runs-on: ubuntu-latest
     needs: build
     permissions:
@@ -84,7 +103,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: /tmp/digests
-          pattern: digest-*
+          pattern: digest-${{ matrix.image }}-*
           merge-multiple: true
 
       - name: Log in to the Container registry
@@ -101,7 +120,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.REPO }}-${{ matrix.image }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -111,8 +130,8 @@ jobs:
         working-directory: /tmp/digests
         run: |
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+            $(printf '${{ env.REGISTRY }}/${{ env.REPO }}-${{ matrix.image }}@sha256:%s ' *)
 
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.REPO }}-${{ matrix.image }}:${{ steps.meta.outputs.version }}

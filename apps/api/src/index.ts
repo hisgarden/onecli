@@ -372,6 +372,19 @@ const app = new Elysia()
     requireAuth(auth);
     return getGatewayCounts(auth.accountId);
   })
+  .get("/api/demo-info", async ({ auth, set }) => {
+    requireAuth(auth);
+    const agent = await getDefaultAgent(auth.accountId);
+    if (!agent) {
+      set.status = 404;
+      return { error: "No default agent" };
+    }
+    const host = process.env.GATEWAY_HOST ?? "localhost";
+    return {
+      agentToken: agent.accessToken,
+      gatewayUrl: `${host}:${GATEWAY_PORT}`,
+    };
+  })
   .get("/api/gateway/ca", async ({ set }) => {
     const pem = await loadCaCertificate();
     if (!pem) {
