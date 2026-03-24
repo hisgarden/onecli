@@ -1,7 +1,10 @@
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { jwt } from "@elysiajs/jwt";
+import { staticPlugin } from "@elysiajs/static";
 import { db } from "@onecli/db";
+import { existsSync } from "fs";
+import { resolve } from "path";
 
 // Shared service layer (framework-agnostic — lives in apps/web/src/lib for now)
 import {
@@ -371,9 +374,25 @@ const app = new Elysia()
   .post("/api/user/api-key/regenerate", async ({ auth }) => {
     requireAuth(auth);
     return regenerateApiKey(auth.userId, auth.accountId);
-  })
+  });
 
-  .listen(PORT);
+// ── Static SPA serving (production) ──────────────────────────────────
+// In production, serve the pre-built Vite SPA from ../dashboard/dist.
+// In development, the Vite dev server handles this via proxy.
+const SPA_DIR = resolve(import.meta.dir, "../../dashboard/dist");
+
+if (existsSync(SPA_DIR)) {
+  app
+    .use(staticPlugin({ assets: SPA_DIR, prefix: "/" }))
+    // SPA fallback — serve index.html for all non-API, non-file routes
+    .get("*", async ({ set }) => {
+      set.headers["content-type"] = "text/html";
+      return Bun.file(resolve(SPA_DIR, "index.html"));
+    });
+  console.log(`serving SPA from ${SPA_DIR}`);
+}
+
+app.listen(PORT);
 
 console.log(`onecli-api running on http://localhost:${PORT}`);
 

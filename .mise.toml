@@ -1,3 +1,4 @@
 [tools]
-node = "24"
+node = "24"       # Still needed for Next.js (legacy) and Prisma CLI
+bun = "latest"    # Primary runtime for Elysia API + dashboard
 rust = "latest"

@@ -13,6 +13,7 @@
   "dependencies": {
     "@elysiajs/cors": "^1.2.0",
     "@elysiajs/jwt": "^1.2.0",
+    "@elysiajs/static": "^1.2.0",
     "@onecli/db": "workspace:*",
     "arctic": "^3.5.0",
     "elysia": "^1.2.0",
