@@ -6,6 +6,7 @@ import { SecretsPage } from "@/routes/secrets";
 import { RulesPage } from "@/routes/rules";
 import { SettingsProfilePage } from "@/routes/settings-profile";
 import { SettingsApiKeysPage } from "@/routes/settings-api-keys";
+import { SettingsEncryptionPage } from "@/routes/settings-encryption";
 
 export function AppRouter() {
   return (
@@ -23,6 +24,10 @@ export function AppRouter() {
           />
           <Route path="/settings/profile" element={<SettingsProfilePage />} />
           <Route path="/settings/api-keys" element={<SettingsApiKeysPage />} />
+          <Route
+            path="/settings/encryption"
+            element={<SettingsEncryptionPage />}
+          />
         </Route>
       </Routes>
     </BrowserRouter>
