@@ -17,10 +17,19 @@ if [ "$NEXT_PUBLIC_EDITION" != "cloud" ] && [ -z "$SECRET_ENCRYPTION_KEY" ]; the
   SECRET_ENCRYPTION_KEY=$(cat "$SECRET_KEY_FILE")
 fi
 
+# Auto-generate BETTER_AUTH_SECRET if not provided (reuse encryption key as base)
+if [ -z "$BETTER_AUTH_SECRET" ]; then
+  if [ -n "$NEXTAUTH_SECRET" ]; then
+    export BETTER_AUTH_SECRET="$NEXTAUTH_SECRET"
+  elif [ -n "$SECRET_ENCRYPTION_KEY" ]; then
+    export BETTER_AUTH_SECRET="$SECRET_ENCRYPTION_KEY"
+  fi
+fi
+
 # Determine auth mode
 if [ "$NEXT_PUBLIC_EDITION" = "cloud" ]; then
   AUTH_MODE="cloud"
-elif [ -n "$NEXTAUTH_SECRET" ]; then
+elif [ -n "$BETTER_AUTH_SECRET" ] && [ -n "$GOOGLE_CLIENT_ID" ]; then
   AUTH_MODE="oauth"
 else
   AUTH_MODE="local"

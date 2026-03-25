@@ -20,7 +20,11 @@ const BASE_URL =
 export const auth = betterAuth({
   baseURL: BASE_URL,
   basePath: "/api/auth",
-  secret: process.env.BETTER_AUTH_SECRET ?? process.env.NEXTAUTH_SECRET,
+  secret:
+    process.env.BETTER_AUTH_SECRET ??
+    process.env.NEXTAUTH_SECRET ??
+    process.env.SECRET_ENCRYPTION_KEY ??
+    "local-dev-secret-not-for-production",
   database: pool,
 
   // Map Better Auth models to our table names
