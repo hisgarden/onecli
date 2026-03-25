@@ -1,18 +1,15 @@
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
-import { jwt } from "@elysiajs/jwt";
 import { staticPlugin } from "@elysiajs/static";
 import { db, generateId } from "@onecli/db";
 import { existsSync, readFileSync } from "fs";
 import { resolve } from "path";
-import { Google } from "arctic";
+import { auth } from "./auth";
 import {
   registry,
   httpRequestsTotal,
   httpRequestDuration,
   authTotal,
-  csrfFailures,
-  sessionRefreshes,
 } from "./metrics";
 
 // Shared service layer (extracted to packages/services)
@@ -61,58 +58,12 @@ const PORT = Number(process.env.PORT ?? 10254);
 const CORS_ORIGIN = process.env.CORS_ORIGIN ?? "http://localhost:3000";
 const AUTH_MODE = process.env.AUTH_MODE ?? "local";
 const LOCAL_AUTH_ID = "local-user";
-const JWT_SECRET = process.env.NEXTAUTH_SECRET || "local-mode-fallback-unused";
 const DEFAULT_AGENT_NAME = "Default Agent";
 const DEMO_SECRET_NAME = "Demo Secret (httpbin)";
 const DEMO_SECRET_VALUE = "WELCOME-TO-ONECLI-SECRETS-ARE-WORKING";
 const GATEWAY_PORT = process.env.GATEWAY_PORT ?? "10255";
 const CA_CONTAINER_PATH = "/tmp/onecli-gateway-ca.pem";
 const IS_CLOUD = process.env.NEXT_PUBLIC_EDITION === "cloud";
-
-// ── Cookie / Session Config ─────────────────────────────────────────────
-const IS_SECURE =
-  process.env.NODE_ENV === "production" ||
-  !!process.env.NEXTAUTH_URL?.startsWith("https://");
-const SESSION_COOKIE_NAME = IS_SECURE
-  ? "__Secure-authjs.session-token"
-  : "authjs.session-token";
-const CSRF_COOKIE_NAME = IS_SECURE ? "__Host-csrf" : "csrf";
-const SESSION_MAX_AGE = 86400; // 24 hours (seconds)
-const SESSION_REFRESH_THRESHOLD = 3600; // refresh if < 1 hour remaining
-
-/** Build a hardened Set-Cookie string for the session JWT. */
-function sessionCookie(token: string): string {
-  return `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax${IS_SECURE ? "; Secure" : ""}; Max-Age=${SESSION_MAX_AGE}`;
-}
-
-/** Build a CSRF double-submit cookie (readable by JS, not HttpOnly). */
-function csrfCookie(csrfToken: string): string {
-  return `${CSRF_COOKIE_NAME}=${csrfToken}; Path=/; SameSite=Lax${IS_SECURE ? "; Secure" : ""}; Max-Age=${SESSION_MAX_AGE}`;
-}
-
-/** Clear session + CSRF cookies. */
-function clearSessionCookies(): string[] {
-  return [
-    `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax${IS_SECURE ? "; Secure" : ""}; Max-Age=0`,
-    `${CSRF_COOKIE_NAME}=; Path=/; SameSite=Lax${IS_SECURE ? "; Secure" : ""}; Max-Age=0`,
-  ];
-}
-
-/** Generate a random CSRF token (hex). */
-function generateCsrfToken(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-// Google OAuth via arctic (only initialized if credentials are set)
-const google = process.env.GOOGLE_CLIENT_ID
-  ? new Google(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET!,
-      `${process.env.NEXTAUTH_URL ?? `http://localhost:${PORT}`}/auth/callback`,
-    )
-  : null;
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -268,12 +219,9 @@ const app = new Elysia()
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     }),
   )
-  .use(
-    jwt({
-      name: "jwt",
-      secret: process.env.NEXTAUTH_SECRET || "local-mode-fallback-unused",
-    }),
-  )
+
+  // Mount Better Auth handler (handles /api/auth/* routes, CSRF, sessions)
+  .mount(auth.handler)
 
   // Global error handler
   .onError(({ error, set }) => {
@@ -290,64 +238,51 @@ const app = new Elysia()
     return { error: "Internal server error" };
   })
 
-  // Derive: request ID + auth context + auth source
-  .derive(async ({ request, jwt: jwtService, cookie }) => {
+  // Derive: request ID + auth context
+  .derive(async ({ request }) => {
     const requestId =
       request.headers.get("x-request-id") ?? generateRequestId();
 
-    // Resolve auth — track source for CSRF exemption.
-    // Auth errors (DB down, Prisma timeout) are non-fatal: treat as unauthenticated.
-    // Routes that need auth will call requireAuth() and return 401.
-    let auth: AuthContext | null = null;
-    let authSource: "api-key" | "local" | "cookie" | null = null;
-    let jwtCsrf: string | null = null;
+    // Resolve auth — try API key first, then local mode, then Better Auth session.
+    // Auth errors are non-fatal: treat as unauthenticated.
+    let authCtx: AuthContext | null = null;
+    let authSource: "api-key" | "local" | "session" | null = null;
 
     try {
-      auth = await validateApiKey(request);
-      if (auth) authSource = "api-key";
+      authCtx = await validateApiKey(request);
+      if (authCtx) authSource = "api-key";
 
-      if (!auth && AUTH_MODE === "local") {
-        auth = await resolveLocalAuth();
-        if (auth) authSource = "local";
+      if (!authCtx && AUTH_MODE === "local") {
+        authCtx = await resolveLocalAuth();
+        if (authCtx) authSource = "local";
       }
 
-      if (!auth) {
-        const token = cookie[SESSION_COOKIE_NAME]?.value as string | undefined;
-        if (token) {
-          const payload = await jwtService.verify(token);
-          if (payload && payload.authId) {
-            const exp = payload.exp as number | undefined;
-            if (exp && exp < Math.floor(Date.now() / 1000)) {
-              // Token expired — treat as unauthenticated
-            } else {
-              const row = await db
-                .selectFrom("users")
-                .innerJoin(
-                  "accountMembers",
-                  "accountMembers.userId",
-                  "users.id",
-                )
-                .select(["users.id as userId", "accountMembers.accountId"])
-                .where("users.externalAuthId", "=", payload.authId as string)
-                .executeTakeFirst();
-              if (row) {
-                auth = {
-                  userId: row.userId,
-                  accountId: row.accountId,
-                };
-                authSource = "cookie";
-                jwtCsrf = (payload.csrf as string) ?? null;
-              }
-            }
+      if (!authCtx) {
+        // Better Auth session — resolves from cookie automatically
+        const session = await auth.api.getSession({
+          headers: request.headers,
+        });
+        if (session?.user) {
+          // Map Better Auth user to our AuthContext (need accountId from membership)
+          const membership = await db
+            .selectFrom("accountMembers")
+            .select("accountId")
+            .where("userId", "=", session.user.id)
+            .executeTakeFirst();
+          if (membership) {
+            authCtx = {
+              userId: session.user.id,
+              accountId: membership.accountId,
+            };
+            authSource = "session";
           }
         }
       }
 
-      if (auth) {
+      if (authCtx) {
         authTotal.inc({ source: authSource!, result: "success" });
       }
     } catch (err) {
-      // Auth resolution failed (DB unreachable, etc.) — continue unauthenticated
       console.error(
         "auth resolution error:",
         err instanceof Error ? err.message : err,
@@ -355,41 +290,11 @@ const app = new Elysia()
     }
 
     return {
-      auth,
+      auth: authCtx,
       authSource,
-      jwtCsrf,
       requestId,
       requestStart: performance.now(),
     };
-  })
-
-  // CSRF validation for state-changing requests using cookie auth.
-  // API key and local-mode auth are exempt (no browser cookie to forge).
-  .onBeforeHandle(({ request, authSource, jwtCsrf, cookie, set }) => {
-    if (authSource !== "cookie") return; // exempt non-cookie auth
-    const method = request.method;
-    if (method === "GET" || method === "HEAD" || method === "OPTIONS") return;
-
-    // Skip CSRF for auth endpoints (callback sets cookies, not reads them)
-    const url = new URL(request.url);
-    if (url.pathname.startsWith("/auth/")) return;
-
-    // Double-submit: X-CSRF-Token header must match csrf cookie
-    const headerToken = request.headers.get("x-csrf-token");
-    const cookieToken = cookie[CSRF_COOKIE_NAME]?.value as string | undefined;
-
-    if (!headerToken || !cookieToken || headerToken !== cookieToken) {
-      csrfFailures.inc();
-      set.status = 403;
-      return { error: "CSRF token mismatch" };
-    }
-
-    // Also verify CSRF in JWT matches cookie (triple check)
-    if (jwtCsrf && jwtCsrf !== cookieToken) {
-      csrfFailures.inc();
-      set.status = 403;
-      return { error: "CSRF token mismatch" };
-    }
   })
 
   // Response header: x-request-id
@@ -589,21 +494,11 @@ const app = new Elysia()
     return regenerateApiKey(auth.userId, auth.accountId);
   })
 
-  // ── Auth / Session Sync ─────────────────────────────────────────────
-  // Called on first login and dashboard mount. Upserts user, creates
-  // account + defaults. Replaces Next.js /api/auth/session.
-  .get("/api/auth/session", async ({ auth, jwt: jwtService, set }) => {
-    // In local mode, auth is already resolved from the derive block
-    if (AUTH_MODE === "local" && auth) {
-      const user = await db
-        .selectFrom("users")
-        .select(["id", "email", "name"])
-        .where("id", "=", auth.userId)
-        .executeTakeFirst();
-      return user ?? { error: "User not found" };
-    }
-
-    // OAuth mode — require auth
+  // ── Session Sync ───────────────────────────────────────────────────
+  // Called on dashboard mount. Ensures account + defaults exist for the
+  // authenticated user (idempotent). In local mode, returns user directly.
+  // In OAuth mode, bootstraps account/agent/demo data on first login.
+  .get("/api/session", async ({ auth, set }) => {
     if (!auth) {
       set.status = 401;
       return { error: "Not authenticated" };
@@ -630,11 +525,7 @@ const app = new Elysia()
         .execute();
       await db
         .insertInto("accountMembers")
-        .values({
-          accountId,
-          userId: auth.userId,
-          role: "owner",
-        })
+        .values({ accountId, userId: auth.userId, role: "owner" })
         .execute();
       await db
         .insertInto("apiKeys")
@@ -706,155 +597,6 @@ const app = new Elysia()
       .executeTakeFirst();
     return user;
   })
-
-  // ── Google OAuth ────────────────────────────────────────────────────
-  .get("/auth/login", async ({ set }) => {
-    if (!google) {
-      set.status = 503;
-      return {
-        error:
-          "OAuth not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.",
-      };
-    }
-    const state = crypto.randomUUID();
-    const codeVerifier = crypto.randomUUID() + crypto.randomUUID();
-    const url = google.createAuthorizationURL(state, codeVerifier, [
-      "openid",
-      "email",
-      "profile",
-    ]);
-    // Store state + verifier in a short-lived cookie
-    set.headers["set-cookie"] = [
-      `oauth_state=${state}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`,
-      `oauth_verifier=${codeVerifier}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`,
-    ].join(", ");
-    set.redirect = url.toString();
-  })
-
-  .get("/auth/callback", async ({ query, cookie, jwt: jwtService, set }) => {
-    if (!google) {
-      set.status = 503;
-      return { error: "OAuth not configured" };
-    }
-
-    const { code, state } = query as { code?: string; state?: string };
-    const savedState = cookie.oauth_state?.value as string | undefined;
-    const codeVerifier = cookie.oauth_verifier?.value as string | undefined;
-
-    if (!code || !state || state !== savedState || !codeVerifier) {
-      set.status = 400;
-      return { error: "Invalid OAuth callback" };
-    }
-
-    const tokens = await google.validateAuthorizationCode(code, codeVerifier);
-    const accessToken = tokens.accessToken();
-
-    // Fetch user info from Google
-    const userInfoResp = await fetch(
-      "https://openidconnect.googleapis.com/v1/userinfo",
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      },
-    );
-    const userInfo = (await userInfoResp.json()) as {
-      sub: string;
-      email: string;
-      name?: string;
-    };
-
-    // Upsert user
-    const user = await db
-      .insertInto("users")
-      .values({
-        id: generateId(),
-        externalAuthId: userInfo.sub,
-        email: userInfo.email,
-        name: userInfo.name ?? null,
-      })
-      .onConflict((oc) =>
-        oc.column("email").doUpdateSet({
-          externalAuthId: userInfo.sub,
-          name: userInfo.name ?? null,
-        }),
-      )
-      .returning(["id", "email", "name"])
-      .executeTakeFirstOrThrow();
-
-    // Issue JWT with expiry
-    const csrfToken = generateCsrfToken();
-    const token = await jwtService.sign({
-      sub: user.id,
-      authId: userInfo.sub,
-      email: user.email,
-      csrf: csrfToken,
-      exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE,
-    });
-
-    // Clear OAuth cookies, set hardened session + CSRF cookies
-    set.headers["set-cookie"] = [
-      sessionCookie(token),
-      csrfCookie(csrfToken),
-      `oauth_state=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
-      `oauth_verifier=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
-    ].join(", ");
-
-    set.redirect = "/overview";
-  })
-
-  .get("/auth/signout", async ({ set }) => {
-    set.headers["set-cookie"] = clearSessionCookies().join(", ");
-    set.redirect = "/auth/login";
-  })
-
-  // ── Session Refresh ──────────────────────────────────────────────────
-  // Called by the SPA to silently refresh a session nearing expiry.
-  // Issues a new JWT + CSRF pair if the current token is valid but within
-  // the refresh threshold.
-  .post(
-    "/api/auth/refresh",
-    async ({ auth, authSource, cookie, jwt: jwtService, set }) => {
-      requireAuth(auth);
-      if (authSource !== "cookie") {
-        return { refreshed: false, reason: "not-cookie-auth" };
-      }
-
-      const token = cookie[SESSION_COOKIE_NAME]?.value as string | undefined;
-      if (!token) {
-        set.status = 401;
-        return { error: "No session" };
-      }
-
-      const payload = await jwtService.verify(token);
-      if (!payload || !payload.authId) {
-        set.status = 401;
-        return { error: "Invalid session" };
-      }
-
-      const exp = payload.exp as number | undefined;
-      const now = Math.floor(Date.now() / 1000);
-      if (exp && exp - now > SESSION_REFRESH_THRESHOLD) {
-        return { refreshed: false, reason: "not-near-expiry" };
-      }
-
-      // Issue fresh token
-      const csrfToken = generateCsrfToken();
-      const newToken = await jwtService.sign({
-        sub: payload.sub,
-        authId: payload.authId,
-        email: payload.email,
-        csrf: csrfToken,
-        exp: now + SESSION_MAX_AGE,
-      });
-
-      set.headers["set-cookie"] = [
-        sessionCookie(newToken),
-        csrfCookie(csrfToken),
-      ].join(", ");
-
-      sessionRefreshes.inc();
-      return { refreshed: true };
-    },
-  )
 
   // ── Container Config ────────────────────────────────────────────────
   .get("/api/container-config", async ({ auth, query, set }) => {

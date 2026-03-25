@@ -47,16 +47,4 @@ export const authTotal = new Counter({
   registers: [registry],
 });
 
-/** CSRF validation failures. */
-export const csrfFailures = new Counter({
-  name: "onecli_api_csrf_failures_total",
-  help: "Total CSRF validation failures",
-  registers: [registry],
-});
-
-/** Active sessions refreshed. */
-export const sessionRefreshes = new Counter({
-  name: "onecli_api_session_refreshes_total",
-  help: "Total session token refreshes",
-  registers: [registry],
-});
+// CSRF and session refresh are now handled by Better Auth.
