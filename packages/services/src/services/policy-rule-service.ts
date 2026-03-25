@@ -1,4 +1,5 @@
 import { db } from "@onecli/db";
+import { generateId } from "@onecli/db/id";
 import { ServiceError } from "./errors";
 import {
   type CreatePolicyRuleInput,
@@ -8,23 +9,24 @@ import {
 export type { CreatePolicyRuleInput, UpdatePolicyRuleInput };
 
 export const listPolicyRules = async (accountId: string) => {
-  return db.policyRule.findMany({
-    where: { accountId },
-    select: {
-      id: true,
-      name: true,
-      hostPattern: true,
-      pathPattern: true,
-      method: true,
-      action: true,
-      enabled: true,
-      agentId: true,
-      rateLimit: true,
-      rateLimitWindow: true,
-      createdAt: true,
-    },
-    orderBy: { createdAt: "desc" },
-  });
+  return db
+    .selectFrom("policyRules")
+    .select([
+      "id",
+      "name",
+      "hostPattern",
+      "pathPattern",
+      "method",
+      "action",
+      "enabled",
+      "agentId",
+      "rateLimit",
+      "rateLimitWindow",
+      "createdAt",
+    ])
+    .where("accountId", "=", accountId)
+    .orderBy("createdAt", "desc")
+    .execute();
 };
 
 export const createPolicyRule = async (
@@ -35,15 +37,19 @@ export const createPolicyRule = async (
 
   // Validate agent belongs to account if specified
   if (input.agentId) {
-    const agent = await db.agent.findFirst({
-      where: { id: input.agentId, accountId },
-      select: { id: true },
-    });
+    const agent = await db
+      .selectFrom("agents")
+      .select("id")
+      .where("id", "=", input.agentId)
+      .where("accountId", "=", accountId)
+      .executeTakeFirst();
     if (!agent) throw new ServiceError("NOT_FOUND", "Agent not found");
   }
 
-  return db.policyRule.create({
-    data: {
+  return db
+    .insertInto("policyRules")
+    .values({
+      id: generateId(),
       name,
       hostPattern: input.hostPattern.trim(),
       pathPattern: input.pathPattern?.trim() || null,
@@ -56,21 +62,21 @@ export const createPolicyRule = async (
       rateLimitWindow:
         input.action === "rate_limit" ? (input.rateLimitWindow ?? null) : null,
       accountId,
-    },
-    select: {
-      id: true,
-      name: true,
-      hostPattern: true,
-      pathPattern: true,
-      method: true,
-      action: true,
-      enabled: true,
-      agentId: true,
-      rateLimit: true,
-      rateLimitWindow: true,
-      createdAt: true,
-    },
-  });
+    })
+    .returning([
+      "id",
+      "name",
+      "hostPattern",
+      "pathPattern",
+      "method",
+      "action",
+      "enabled",
+      "agentId",
+      "rateLimit",
+      "rateLimitWindow",
+      "createdAt",
+    ])
+    .executeTakeFirstOrThrow();
 };
 
 export const updatePolicyRule = async (
@@ -78,19 +84,23 @@ export const updatePolicyRule = async (
   ruleId: string,
   input: UpdatePolicyRuleInput,
 ) => {
-  const rule = await db.policyRule.findFirst({
-    where: { id: ruleId, accountId },
-    select: { id: true },
-  });
+  const rule = await db
+    .selectFrom("policyRules")
+    .select("id")
+    .where("id", "=", ruleId)
+    .where("accountId", "=", accountId)
+    .executeTakeFirst();
 
   if (!rule) throw new ServiceError("NOT_FOUND", "Policy rule not found");
 
   // Validate agent belongs to account if changing agentId
   if (input.agentId) {
-    const agent = await db.agent.findFirst({
-      where: { id: input.agentId, accountId },
-      select: { id: true },
-    });
+    const agent = await db
+      .selectFrom("agents")
+      .select("id")
+      .where("id", "=", input.agentId)
+      .where("accountId", "=", accountId)
+      .executeTakeFirst();
     if (!agent) throw new ServiceError("NOT_FOUND", "Agent not found");
   }
 
@@ -115,19 +125,22 @@ export const updatePolicyRule = async (
   if (input.rateLimitWindow !== undefined)
     data.rateLimitWindow = input.rateLimitWindow;
 
-  await db.policyRule.update({
-    where: { id: ruleId },
-    data,
-  });
+  await db
+    .updateTable("policyRules")
+    .set(data)
+    .where("id", "=", ruleId)
+    .execute();
 };
 
 export const deletePolicyRule = async (accountId: string, ruleId: string) => {
-  const rule = await db.policyRule.findFirst({
-    where: { id: ruleId, accountId },
-    select: { id: true },
-  });
+  const rule = await db
+    .selectFrom("policyRules")
+    .select("id")
+    .where("id", "=", ruleId)
+    .where("accountId", "=", accountId)
+    .executeTakeFirst();
 
   if (!rule) throw new ServiceError("NOT_FOUND", "Policy rule not found");
 
-  await db.policyRule.delete({ where: { id: ruleId } });
+  await db.deleteFrom("policyRules").where("id", "=", ruleId).execute();
 };

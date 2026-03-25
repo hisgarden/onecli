@@ -1,5 +1,7 @@
 import { randomBytes } from "crypto";
-import { db, Prisma } from "@onecli/db";
+import { db } from "@onecli/db";
+import { generateId } from "@onecli/db/id";
+import { isUniqueViolation } from "@onecli/db/errors";
 import { logger } from "../logger";
 import { ServiceError } from "./errors";
 import { IDENTIFIER_REGEX } from "../validations/agent";
@@ -12,38 +14,43 @@ export const generateAccessToken = () =>
   `aoc_${randomBytes(32).toString("hex")}`;
 
 export const listAgents = async (accountId: string) => {
-  const agents = await db.agent.findMany({
-    where: { accountId },
-    select: {
-      id: true,
-      name: true,
-      identifier: true,
-      accessToken: true,
-      isDefault: true,
-      secretMode: true,
-      createdAt: true,
-      _count: { select: { agentSecrets: true } },
-    },
-    orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
-  });
+  const agents = await db
+    .selectFrom("agents")
+    .select([
+      "id",
+      "name",
+      "identifier",
+      "accessToken",
+      "isDefault",
+      "secretMode",
+      "createdAt",
+    ])
+    .select((eb) =>
+      eb
+        .selectFrom("agentSecrets")
+        .whereRef("agentSecrets.agentId", "=", "agents.id")
+        .select(eb.fn.countAll<number>().as("count"))
+        .as("agentSecretsCount"),
+    )
+    .where("accountId", "=", accountId)
+    .orderBy("isDefault", "desc")
+    .orderBy("createdAt", "desc")
+    .execute();
 
   return agents.map((a) => ({
     ...a,
     secretMode: a.secretMode as SecretMode,
+    _count: { agentSecrets: Number(a.agentSecretsCount ?? 0) },
   }));
 };
 
 export const getDefaultAgent = async (accountId: string) => {
-  return db.agent.findFirst({
-    where: { accountId, isDefault: true },
-    select: {
-      id: true,
-      name: true,
-      accessToken: true,
-      isDefault: true,
-      createdAt: true,
-    },
-  });
+  return db
+    .selectFrom("agents")
+    .select(["id", "name", "accessToken", "isDefault", "createdAt"])
+    .where("accountId", "=", accountId)
+    .where("isDefault", "=", true)
+    .executeTakeFirst();
 };
 
 export const createAgent = async (
@@ -67,10 +74,12 @@ export const createAgent = async (
     );
   }
 
-  const existing = await db.agent.findFirst({
-    where: { accountId, identifier: trimmedIdentifier },
-    select: { id: true },
-  });
+  const existing = await db
+    .selectFrom("agents")
+    .select("id")
+    .where("accountId", "=", accountId)
+    .where("identifier", "=", trimmedIdentifier)
+    .executeTakeFirst();
   if (existing) {
     throw new ServiceError(
       "CONFLICT",
@@ -81,33 +90,33 @@ export const createAgent = async (
   const accessToken = generateAccessToken();
 
   try {
-    const agent = await db.agent.create({
-      data: {
+    const agent = await db
+      .insertInto("agents")
+      .values({
+        id: generateId(),
         name: trimmed,
         identifier: trimmedIdentifier,
         accessToken,
         secretMode: "selective",
         accountId,
-      },
-      select: {
-        id: true,
-        name: true,
-        identifier: true,
-        createdAt: true,
-      },
-    });
+      })
+      .returning(["id", "name", "identifier", "createdAt"])
+      .executeTakeFirstOrThrow();
 
     // Auto-assign the first anthropic secret if one exists
-    const anthropicSecret = await db.secret.findFirst({
-      where: { accountId, type: "anthropic" },
-      select: { id: true },
-      orderBy: { createdAt: "asc" },
-    });
+    const anthropicSecret = await db
+      .selectFrom("secrets")
+      .select("id")
+      .where("accountId", "=", accountId)
+      .where("type", "=", "anthropic")
+      .orderBy("createdAt", "asc")
+      .executeTakeFirst();
 
     if (anthropicSecret) {
-      await db.agentSecret.create({
-        data: { agentId: agent.id, secretId: anthropicSecret.id },
-      });
+      await db
+        .insertInto("agentSecrets")
+        .values({ agentId: agent.id, secretId: anthropicSecret.id })
+        .execute();
     }
 
     audit.info(
@@ -117,10 +126,7 @@ export const createAgent = async (
 
     return agent;
   } catch (err) {
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === "P2002"
-    ) {
+    if (isUniqueViolation(err)) {
       throw new ServiceError(
         "CONFLICT",
         "An agent with this identifier already exists",
@@ -131,16 +137,18 @@ export const createAgent = async (
 };
 
 export const deleteAgent = async (accountId: string, agentId: string) => {
-  const agent = await db.agent.findFirst({
-    where: { id: agentId, accountId },
-    select: { id: true, isDefault: true },
-  });
+  const agent = await db
+    .selectFrom("agents")
+    .select(["id", "isDefault"])
+    .where("id", "=", agentId)
+    .where("accountId", "=", accountId)
+    .executeTakeFirst();
 
   if (!agent) throw new ServiceError("NOT_FOUND", "Agent not found");
   if (agent.isDefault)
     throw new ServiceError("BAD_REQUEST", "Cannot delete the default agent");
 
-  await db.agent.delete({ where: { id: agentId } });
+  await db.deleteFrom("agents").where("id", "=", agentId).execute();
 
   audit.info({ accountId, agentId }, "agent deleted");
 };
@@ -158,53 +166,62 @@ export const renameAgent = async (
     );
   }
 
-  const agent = await db.agent.findFirst({
-    where: { id: agentId, accountId },
-    select: { id: true },
-  });
+  const agent = await db
+    .selectFrom("agents")
+    .select("id")
+    .where("id", "=", agentId)
+    .where("accountId", "=", accountId)
+    .executeTakeFirst();
 
   if (!agent) throw new ServiceError("NOT_FOUND", "Agent not found");
 
-  await db.agent.update({
-    where: { id: agentId },
-    data: { name: trimmed },
-  });
+  await db
+    .updateTable("agents")
+    .set({ name: trimmed })
+    .where("id", "=", agentId)
+    .execute();
 };
 
 export const regenerateAgentToken = async (
   accountId: string,
   agentId: string,
 ) => {
-  const agent = await db.agent.findFirst({
-    where: { id: agentId, accountId },
-    select: { id: true },
-  });
+  const agent = await db
+    .selectFrom("agents")
+    .select("id")
+    .where("id", "=", agentId)
+    .where("accountId", "=", accountId)
+    .executeTakeFirst();
 
   if (!agent) throw new ServiceError("NOT_FOUND", "Agent not found");
 
   const accessToken = generateAccessToken();
 
-  const updated = await db.agent.update({
-    where: { id: agentId },
-    data: { accessToken },
-    select: { accessToken: true },
-  });
+  const updated = await db
+    .updateTable("agents")
+    .set({ accessToken })
+    .where("id", "=", agentId)
+    .returning("accessToken")
+    .executeTakeFirstOrThrow();
 
   return { accessToken: updated.accessToken };
 };
 
 export const getAgentSecrets = async (accountId: string, agentId: string) => {
-  const agent = await db.agent.findFirst({
-    where: { id: agentId, accountId },
-    select: { id: true },
-  });
+  const agent = await db
+    .selectFrom("agents")
+    .select("id")
+    .where("id", "=", agentId)
+    .where("accountId", "=", accountId)
+    .executeTakeFirst();
 
   if (!agent) throw new ServiceError("NOT_FOUND", "Agent not found");
 
-  const rows = await db.agentSecret.findMany({
-    where: { agentId },
-    select: { secretId: true },
-  });
+  const rows = await db
+    .selectFrom("agentSecrets")
+    .select("secretId")
+    .where("agentId", "=", agentId)
+    .execute();
 
   return rows.map((r) => r.secretId);
 };
@@ -214,19 +231,22 @@ export const updateAgentSecretMode = async (
   agentId: string,
   mode: SecretMode,
 ) => {
-  const agent = await db.agent.findFirst({
-    where: { id: agentId, accountId },
-    select: { id: true, secretMode: true },
-  });
+  const agent = await db
+    .selectFrom("agents")
+    .select(["id", "secretMode"])
+    .where("id", "=", agentId)
+    .where("accountId", "=", accountId)
+    .executeTakeFirst();
 
   if (!agent) throw new ServiceError("NOT_FOUND", "Agent not found");
 
   const previousMode = agent.secretMode;
 
-  await db.agent.update({
-    where: { id: agentId },
-    data: { secretMode: mode },
-  });
+  await db
+    .updateTable("agents")
+    .set({ secretMode: mode })
+    .where("id", "=", agentId)
+    .execute();
 
   audit.info(
     { accountId, agentId, previousMode, newMode: mode },
@@ -239,18 +259,22 @@ export const updateAgentSecrets = async (
   agentId: string,
   secretIds: string[],
 ) => {
-  const agent = await db.agent.findFirst({
-    where: { id: agentId, accountId },
-    select: { id: true },
-  });
+  const agent = await db
+    .selectFrom("agents")
+    .select("id")
+    .where("id", "=", agentId)
+    .where("accountId", "=", accountId)
+    .executeTakeFirst();
 
   if (!agent) throw new ServiceError("NOT_FOUND", "Agent not found");
 
   // Validate all secrets belong to this account
-  const secrets = await db.secret.findMany({
-    where: { id: { in: secretIds }, accountId },
-    select: { id: true },
-  });
+  const secrets = await db
+    .selectFrom("secrets")
+    .select("id")
+    .where("id", "in", secretIds)
+    .where("accountId", "=", accountId)
+    .execute();
 
   const validIds = new Set(secrets.map((s) => s.id));
   const invalid = secretIds.filter((id) => !validIds.has(id));
@@ -258,10 +282,16 @@ export const updateAgentSecrets = async (
     throw new ServiceError("BAD_REQUEST", "One or more secrets not found");
   }
 
-  await db.$transaction([
-    db.agentSecret.deleteMany({ where: { agentId } }),
-    ...secretIds.map((secretId) =>
-      db.agentSecret.create({ data: { agentId, secretId } }),
-    ),
-  ]);
+  await db.transaction().execute(async (trx) => {
+    await trx
+      .deleteFrom("agentSecrets")
+      .where("agentId", "=", agentId)
+      .execute();
+    for (const secretId of secretIds) {
+      await trx
+        .insertInto("agentSecrets")
+        .values({ agentId, secretId })
+        .execute();
+    }
+  });
 };

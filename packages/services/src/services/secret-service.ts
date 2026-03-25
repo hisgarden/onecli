@@ -1,4 +1,5 @@
-import { db, Prisma } from "@onecli/db";
+import { db } from "@onecli/db";
+import { generateId } from "@onecli/db/id";
 import { cryptoService } from "../crypto";
 import { logger } from "../logger";
 import { ServiceError } from "./errors";
@@ -25,19 +26,20 @@ const buildPreview = (plaintext: string): string => {
 };
 
 export const listSecrets = async (accountId: string) => {
-  const secrets = await db.secret.findMany({
-    where: { accountId },
-    select: {
-      id: true,
-      name: true,
-      type: true,
-      hostPattern: true,
-      pathPattern: true,
-      injectionConfig: true,
-      createdAt: true,
-    },
-    orderBy: { createdAt: "desc" },
-  });
+  const secrets = await db
+    .selectFrom("secrets")
+    .select([
+      "id",
+      "name",
+      "type",
+      "hostPattern",
+      "pathPattern",
+      "injectionConfig",
+      "createdAt",
+    ])
+    .where("accountId", "=", accountId)
+    .orderBy("createdAt", "desc")
+    .execute();
 
   return secrets.map((s) => ({
     ...s,
@@ -80,19 +82,21 @@ export const createSecret = async (
   const pathPattern = input.pathPattern?.trim() || null;
   const injectionConfig =
     input.type === "generic" && input.injectionConfig
-      ? ({
+      ? JSON.stringify({
           headerName: input.injectionConfig.headerName.trim(),
           valueFormat: input.injectionConfig.valueFormat?.trim() || "{value}",
-        } as Prisma.InputJsonValue)
-      : Prisma.JsonNull;
+        })
+      : null;
 
   const metadata =
     input.type === "anthropic"
-      ? ({ authMode: detectAnthropicAuthMode(value) } as Prisma.InputJsonValue)
-      : Prisma.JsonNull;
+      ? JSON.stringify({ authMode: detectAnthropicAuthMode(value) })
+      : null;
 
-  const secret = await db.secret.create({
-    data: {
+  const secret = await db
+    .insertInto("secrets")
+    .values({
+      id: generateId(),
       name,
       type: input.type,
       encryptedValue,
@@ -101,16 +105,16 @@ export const createSecret = async (
       injectionConfig,
       metadata,
       accountId,
-    },
-    select: {
-      id: true,
-      name: true,
-      type: true,
-      hostPattern: true,
-      pathPattern: true,
-      createdAt: true,
-    },
-  });
+    })
+    .returning([
+      "id",
+      "name",
+      "type",
+      "hostPattern",
+      "pathPattern",
+      "createdAt",
+    ])
+    .executeTakeFirstOrThrow();
 
   audit.info(
     { accountId, secretId: secret.id, type: input.type, hostPattern },
@@ -121,14 +125,16 @@ export const createSecret = async (
 };
 
 export const deleteSecret = async (accountId: string, secretId: string) => {
-  const secret = await db.secret.findFirst({
-    where: { id: secretId, accountId },
-    select: { id: true },
-  });
+  const secret = await db
+    .selectFrom("secrets")
+    .select("id")
+    .where("id", "=", secretId)
+    .where("accountId", "=", accountId)
+    .executeTakeFirst();
 
   if (!secret) throw new ServiceError("NOT_FOUND", "Secret not found");
 
-  await db.secret.delete({ where: { id: secretId } });
+  await db.deleteFrom("secrets").where("id", "=", secretId).execute();
 
   audit.info({ accountId, secretId }, "secret deleted");
 };
@@ -138,10 +144,12 @@ export const updateSecret = async (
   secretId: string,
   input: UpdateSecretInput,
 ) => {
-  const secret = await db.secret.findFirst({
-    where: { id: secretId, accountId },
-    select: { id: true, type: true },
-  });
+  const secret = await db
+    .selectFrom("secrets")
+    .select(["id", "type"])
+    .where("id", "=", secretId)
+    .where("accountId", "=", accountId)
+    .executeTakeFirst();
 
   if (!secret) throw new ServiceError("NOT_FOUND", "Secret not found");
 
@@ -153,11 +161,10 @@ export const updateSecret = async (
       throw new ServiceError("BAD_REQUEST", "Secret value is required");
     data.encryptedValue = await cryptoService.encrypt(value);
 
-    // Re-detect auth mode when value changes for Anthropic secrets
     if (secret.type === "anthropic") {
-      data.metadata = {
+      data.metadata = JSON.stringify({
         authMode: detectAnthropicAuthMode(value),
-      } as Prisma.InputJsonValue;
+      });
     }
   }
 
@@ -174,19 +181,20 @@ export const updateSecret = async (
 
   if (input.injectionConfig !== undefined && secret.type === "generic") {
     data.injectionConfig = input.injectionConfig
-      ? ({
+      ? JSON.stringify({
           headerName: input.injectionConfig.headerName.trim(),
           valueFormat: input.injectionConfig.valueFormat?.trim() || "{value}",
-        } as Prisma.InputJsonValue)
-      : Prisma.JsonNull;
+        })
+      : null;
   }
 
   if (Object.keys(data).length === 0) {
     throw new ServiceError("BAD_REQUEST", "No fields to update");
   }
 
-  await db.secret.update({
-    where: { id: secretId },
-    data,
-  });
+  await db
+    .updateTable("secrets")
+    .set(data)
+    .where("id", "=", secretId)
+    .execute();
 };

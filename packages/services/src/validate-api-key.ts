@@ -18,10 +18,11 @@ export const validateApiKey = async (
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : null;
   if (!token || !token.startsWith("oc_")) return null;
 
-  const apiKey = await db.apiKey.findUnique({
-    where: { key: token },
-    select: { userId: true, accountId: true },
-  });
+  const apiKey = await db
+    .selectFrom("apiKeys")
+    .select(["userId", "accountId"])
+    .where("key", "=", token)
+    .executeTakeFirst();
 
   if (!apiKey) return null;
 

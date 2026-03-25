@@ -2,15 +2,11 @@ import { db } from "@onecli/db";
 import { ServiceError } from "./errors";
 
 export const getUser = async (userId: string) => {
-  const user = await db.user.findUnique({
-    where: { id: userId },
-    select: {
-      id: true,
-      email: true,
-      name: true,
-      createdAt: true,
-    },
-  });
+  const user = await db
+    .selectFrom("users")
+    .select(["id", "email", "name", "createdAt"])
+    .where("id", "=", userId)
+    .executeTakeFirst();
 
   if (!user) throw new ServiceError("NOT_FOUND", "User not found");
 
@@ -27,15 +23,12 @@ export const updateProfile = async (userId: string, name: string) => {
     );
   }
 
-  const user = await db.user.update({
-    where: { id: userId },
-    data: { name: trimmed },
-    select: {
-      id: true,
-      email: true,
-      name: true,
-    },
-  });
+  const user = await db
+    .updateTable("users")
+    .set({ name: trimmed })
+    .where("id", "=", userId)
+    .returning(["id", "email", "name"])
+    .executeTakeFirstOrThrow();
 
   return user;
 };
