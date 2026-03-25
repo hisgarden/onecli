@@ -7,6 +7,7 @@
  */
 import { betterAuth } from "better-auth";
 import pg from "pg";
+import { createId } from "@paralleldrive/cuid2";
 
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
@@ -17,7 +18,18 @@ const BASE_URL =
   process.env.NEXTAUTH_URL ??
   `http://localhost:${process.env.PORT ?? 10254}`;
 
+// Build social providers config — only include Google if credentials are set
+const socialProviders: Record<string, unknown> = {};
+if (process.env.GOOGLE_CLIENT_ID) {
+  socialProviders.google = {
+    clientId: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    prompt: "select_account",
+  };
+}
+
 export const auth = betterAuth({
+  appName: "OneCLI",
   baseURL: BASE_URL,
   basePath: "/api/auth",
   secret:
@@ -31,7 +43,6 @@ export const auth = betterAuth({
   user: {
     modelName: "users",
     fields: {
-      // Our users table uses snake_case in PostgreSQL
       emailVerified: "email_verified",
       createdAt: "created_at",
       updatedAt: "updated_at",
@@ -60,27 +71,14 @@ export const auth = betterAuth({
     modelName: "ba_verifications",
   },
 
-  // ID generation — use cuid2 to match existing data
   advanced: {
     database: {
-      generateId: () => {
-        const { createId } = require("@paralleldrive/cuid2");
-        return createId();
-      },
+      generateId: () => createId(),
     },
     cookiePrefix: "onecli",
   },
 
-  // OAuth providers
-  socialProviders: {
-    google: process.env.GOOGLE_CLIENT_ID
-      ? {
-          clientId: process.env.GOOGLE_CLIENT_ID,
-          clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-          prompt: "select_account",
-        }
-      : undefined!,
-  },
+  socialProviders: socialProviders as any,
 
   trustedOrigins: (process.env.CORS_ORIGIN ?? "http://localhost:3000")
     .split(",")
