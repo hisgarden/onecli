@@ -40,7 +40,7 @@ OneCLI is an open-source gateway that sits between your AI agents and the servic
 </picture>
 
 - **[Rust Gateway](apps/gateway)**: fast HTTP gateway that intercepts outbound requests and injects credentials. Agents authenticate with access tokens via `Proxy-Authorization` headers.
-- **[Web Dashboard](apps/web)**: Next.js app for managing agents, secrets, and permissions. Provides the API the gateway uses to resolve which credentials to inject for each request.
+- **[Elysia API + Dashboard](apps/api)**: Bun/Elysia API with a React SPA dashboard for managing agents, secrets, and permissions. Provides the API the gateway uses to resolve which credentials to inject for each request.
 - **Secret Store**: AES-256-GCM encrypted credential storage. Secrets are decrypted only at request time, matched by host and path patterns, and injected by the gateway as headers.
 
 ## Quick Start
@@ -48,7 +48,7 @@ OneCLI is an open-source gateway that sits between your AI agents and the servic
 The fastest way to run OneCLI locally:
 
 ```bash
-git clone https://github.com/onecli/onecli.git
+git clone https://github.com/hisgarden/onecli.git
 cd onecli
 docker compose -f docker/docker-compose.yml up
 ```
