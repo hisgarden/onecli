@@ -43,9 +43,10 @@ RUN apk update && \
     apk add --no-cache bun postgresql-client jq wget && \
     rm -rf /var/cache/apk/*
 
-# Install only API runtime deps (strip workspace + dev refs)
-COPY --from=builder /app/apps/api/package.json /tmp/pkg.json
-RUN jq 'del(.dependencies["@onecli/db"], .dependencies["@onecli/services"]) | del(.devDependencies)' /tmp/pkg.json > ./package.json && \
+# Install API + DB runtime deps (merge db deps, strip workspace refs)
+COPY --from=builder /app/apps/api/package.json /tmp/api-pkg.json
+COPY --from=builder /app/packages/db/package.json /tmp/db-pkg.json
+RUN jq -s '.[0].dependencies * .[1].dependencies | del(.["@onecli/db"], .["@onecli/services"], .["@onecli/typescript-config"]) | {dependencies: .}' /tmp/api-pkg.json /tmp/db-pkg.json > ./package.json && \
     bun install --production --no-save && \
     rm -rf /root/.bun/install/cache && \
     apk del jq
