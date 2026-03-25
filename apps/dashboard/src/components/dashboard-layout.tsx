@@ -33,6 +33,7 @@ import {
 import { Separator } from "@onecli/ui/components/separator";
 import { cn } from "@onecli/ui/lib/utils";
 import { TryDemoButton } from "./try-demo-button";
+import { LoginPage } from "@/routes/login";
 
 // ── Nav Items ─────────────────────────────────────────────────────────
 
@@ -163,11 +164,7 @@ export function DashboardLayout() {
   }
 
   if (!isAuthenticated) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <p className="text-muted-foreground">Not authenticated</p>
-      </div>
-    );
+    return <LoginPage />;
   }
 
   return (
