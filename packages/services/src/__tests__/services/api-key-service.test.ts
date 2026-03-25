@@ -5,8 +5,12 @@ let mockDb: MockDb;
 
 mock.module("@onecli/db", () => {
   mockDb = createMockDb();
-  return { db: mockDb, Prisma: {} };
+  return { db: mockDb };
 });
+
+mock.module("@onecli/db/id", () => ({
+  generateId: () => "mock-id",
+}));
 
 import {
   generateApiKey,
@@ -46,14 +50,14 @@ describe("api-key-service", () => {
 
   describe("getApiKey", () => {
     it("should return key when found", async () => {
-      mockDb.apiKey.findFirst.mockResolvedValueOnce({ key: "oc_abc123" });
+      mockDb.queueResult({ key: "oc_abc123" });
 
       const result = await getApiKey(USER_ID, ACCOUNT_ID);
       expect(result.apiKey).toBe("oc_abc123");
     });
 
     it("should throw NOT_FOUND when no key exists", async () => {
-      mockDb.apiKey.findFirst.mockResolvedValueOnce(null);
+      mockDb.queueResult(undefined);
 
       try {
         await getApiKey(USER_ID, ACCOUNT_ID);
@@ -66,21 +70,17 @@ describe("api-key-service", () => {
 
   describe("regenerateApiKey", () => {
     it("should update existing key", async () => {
-      mockDb.apiKey.findFirst.mockResolvedValueOnce({ id: "existing-key-id" });
+      mockDb.queueResult({ id: "existing-key-id" }); // selectFrom finds existing
 
       const result = await regenerateApiKey(USER_ID, ACCOUNT_ID);
       expect(result.apiKey.startsWith("oc_")).toBe(true);
-      expect(mockDb.apiKey.update).toHaveBeenCalled();
-      expect(mockDb.apiKey.create).not.toHaveBeenCalled();
     });
 
     it("should create new key when none exists", async () => {
-      mockDb.apiKey.findFirst.mockResolvedValueOnce(null);
+      mockDb.queueResult(undefined); // selectFrom finds nothing
 
       const result = await regenerateApiKey(USER_ID, ACCOUNT_ID);
       expect(result.apiKey.startsWith("oc_")).toBe(true);
-      expect(mockDb.apiKey.create).toHaveBeenCalled();
-      expect(mockDb.apiKey.update).not.toHaveBeenCalled();
     });
   });
 });

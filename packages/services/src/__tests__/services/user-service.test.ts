@@ -5,7 +5,7 @@ let mockDb: MockDb;
 
 mock.module("@onecli/db", () => {
   mockDb = createMockDb();
-  return { db: mockDb, Prisma: {} };
+  return { db: mockDb };
 });
 
 import { getUser, updateProfile } from "../../services/user-service";
@@ -28,7 +28,7 @@ describe("user-service", () => {
         name: "Test User",
         createdAt: new Date(),
       };
-      mockDb.user.findUnique.mockResolvedValueOnce(user);
+      mockDb.queueResult(user);
 
       const result = await getUser(USER_ID);
       expect(result.id).toBe(USER_ID);
@@ -36,7 +36,7 @@ describe("user-service", () => {
     });
 
     it("should throw NOT_FOUND when user missing", async () => {
-      mockDb.user.findUnique.mockResolvedValueOnce(null);
+      mockDb.queueResult(undefined);
 
       try {
         await getUser(USER_ID);
@@ -67,7 +67,7 @@ describe("user-service", () => {
     });
 
     it("should trim and update name", async () => {
-      mockDb.user.update.mockResolvedValueOnce({
+      mockDb.queueResult({
         id: USER_ID,
         email: "test@example.com",
         name: "New Name",

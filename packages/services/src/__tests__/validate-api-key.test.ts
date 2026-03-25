@@ -5,7 +5,7 @@ let mockDb: MockDb;
 
 mock.module("@onecli/db", () => {
   mockDb = createMockDb();
-  return { db: mockDb, Prisma: {} };
+  return { db: mockDb };
 });
 
 import { validateApiKey } from "../validate-api-key";
@@ -43,7 +43,7 @@ describe("validateApiKey", () => {
   });
 
   it("should return null when key not found in database", async () => {
-    mockDb.apiKey.findUnique.mockResolvedValueOnce(null);
+    mockDb.queueResult(undefined);
 
     const request = new Request("http://localhost/api/test", {
       headers: { authorization: "Bearer oc_notfound" },
@@ -53,10 +53,7 @@ describe("validateApiKey", () => {
   });
 
   it("should return userId and accountId for valid key", async () => {
-    mockDb.apiKey.findUnique.mockResolvedValueOnce({
-      userId: USER_ID,
-      accountId: ACCOUNT_ID,
-    });
+    mockDb.queueResult({ userId: USER_ID, accountId: ACCOUNT_ID });
 
     const request = new Request("http://localhost/api/test", {
       headers: { authorization: "Bearer oc_validkey123" },
@@ -66,10 +63,7 @@ describe("validateApiKey", () => {
   });
 
   it("should trim whitespace from token", async () => {
-    mockDb.apiKey.findUnique.mockResolvedValueOnce({
-      userId: USER_ID,
-      accountId: ACCOUNT_ID,
-    });
+    mockDb.queueResult({ userId: USER_ID, accountId: ACCOUNT_ID });
 
     const request = new Request("http://localhost/api/test", {
       headers: { authorization: "Bearer  oc_validkey123  " },
