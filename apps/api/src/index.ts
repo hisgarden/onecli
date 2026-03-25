@@ -251,52 +251,60 @@ const app = new Elysia()
     const requestId =
       request.headers.get("x-request-id") ?? generateRequestId();
 
-    // Resolve auth — track source for CSRF exemption
+    // Resolve auth — track source for CSRF exemption.
+    // Auth errors (DB down, Prisma timeout) are non-fatal: treat as unauthenticated.
+    // Routes that need auth will call requireAuth() and return 401.
     let auth: AuthContext | null = null;
     let authSource: "api-key" | "local" | "cookie" | null = null;
     let jwtCsrf: string | null = null;
 
-    auth = await validateApiKey(request);
-    if (auth) authSource = "api-key";
+    try {
+      auth = await validateApiKey(request);
+      if (auth) authSource = "api-key";
 
-    if (!auth && AUTH_MODE === "local") {
-      auth = await resolveLocalAuth();
-      if (auth) authSource = "local";
-    }
+      if (!auth && AUTH_MODE === "local") {
+        auth = await resolveLocalAuth();
+        if (auth) authSource = "local";
+      }
 
-    if (!auth) {
-      const token = cookie[SESSION_COOKIE_NAME]?.value as string | undefined;
-      if (token) {
-        const payload = await jwtService.verify(token);
-        if (payload && payload.authId) {
-          // Validate JWT expiry
-          const exp = payload.exp as number | undefined;
-          if (exp && exp < Math.floor(Date.now() / 1000)) {
-            // Token expired — treat as unauthenticated
-          } else {
-            const user = await db.user.findUnique({
-              where: { externalAuthId: payload.authId as string },
-              select: {
-                id: true,
-                memberships: { select: { accountId: true }, take: 1 },
-              },
-            });
-            if (user && user.memberships.length > 0) {
-              auth = {
-                userId: user.id,
-                accountId: user.memberships[0]!.accountId,
-              };
-              authSource = "cookie";
-              jwtCsrf = (payload.csrf as string) ?? null;
+      if (!auth) {
+        const token = cookie[SESSION_COOKIE_NAME]?.value as string | undefined;
+        if (token) {
+          const payload = await jwtService.verify(token);
+          if (payload && payload.authId) {
+            const exp = payload.exp as number | undefined;
+            if (exp && exp < Math.floor(Date.now() / 1000)) {
+              // Token expired — treat as unauthenticated
+            } else {
+              const user = await db.user.findUnique({
+                where: { externalAuthId: payload.authId as string },
+                select: {
+                  id: true,
+                  memberships: { select: { accountId: true }, take: 1 },
+                },
+              });
+              if (user && user.memberships.length > 0) {
+                auth = {
+                  userId: user.id,
+                  accountId: user.memberships[0]!.accountId,
+                };
+                authSource = "cookie";
+                jwtCsrf = (payload.csrf as string) ?? null;
+              }
             }
           }
         }
       }
-    }
 
-    // Track auth outcome for metrics
-    if (auth) {
-      authTotal.inc({ source: authSource!, result: "success" });
+      if (auth) {
+        authTotal.inc({ source: authSource!, result: "success" });
+      }
+    } catch (err) {
+      // Auth resolution failed (DB unreachable, etc.) — continue unauthenticated
+      console.error(
+        "auth resolution error:",
+        err instanceof Error ? err.message : err,
+      );
     }
 
     return {
@@ -862,19 +870,25 @@ const app = new Elysia()
 const SPA_DIR = resolve(import.meta.dir, "../../dashboard/dist");
 
 if (existsSync(SPA_DIR)) {
+  const spaIndex = resolve(SPA_DIR, "index.html");
   app
     .use(staticPlugin({ assets: SPA_DIR, prefix: "/" }))
+    // Explicit root — static plugin doesn't serve index.html for "/"
+    .get("/", async ({ set }) => {
+      set.headers["content-type"] = "text/html";
+      return Bun.file(spaIndex);
+    })
     // SPA fallback — serve index.html for all non-API, non-file routes
     .get("*", async ({ set }) => {
       set.headers["content-type"] = "text/html";
-      return Bun.file(resolve(SPA_DIR, "index.html"));
+      return Bun.file(spaIndex);
     });
   console.log(`serving SPA from ${SPA_DIR}`);
 }
 
-app.listen(PORT);
+app.listen({ port: PORT, hostname: "0.0.0.0" });
 
-console.log(`onecli-api running on http://localhost:${PORT}`);
+console.log(`onecli-api running on http://0.0.0.0:${PORT}`);
 
 // Eden treaty type export — clients import this for end-to-end type safety
 export type App = typeof app;

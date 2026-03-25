@@ -34,11 +34,20 @@ services:
     networks:
       - onecli
 
+  # Init: ensure shared data volume is owned by UID 1001 (onecli user)
+  init:
+    image: alpine:3.21
+    command: sh -c "chown -R 1001:1001 /app/data"
+    volumes:
+      - app-data:/app/data
+
   api:
     build:
       context: ..
       dockerfile: docker/Dockerfile.bun
     depends_on:
+      init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     ports:

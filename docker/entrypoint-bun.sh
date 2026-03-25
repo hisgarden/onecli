@@ -1,9 +1,6 @@
 #!/bin/sh
 set -e
 
-# Ensure data directory is writable (volume may be root-owned)
-chown -R onecli:onecli /app/data 2>/dev/null || true
-
 # Run database migrations (lightweight psql runner — no Prisma CLI needed)
 echo "Running database migrations..."
 ./migrate.sh
@@ -31,4 +28,4 @@ fi
 export AUTH_MODE
 
 echo "Starting onecli-api (auth_mode=$AUTH_MODE)..."
-exec su-exec onecli bun run apps/api/src/index.ts
+exec bun run apps/api/src/index.ts
