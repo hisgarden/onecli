@@ -2,7 +2,7 @@ import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { jwt } from "@elysiajs/jwt";
 import { staticPlugin } from "@elysiajs/static";
-import { db } from "@onecli/db";
+import { db, generateId } from "@onecli/db";
 import { existsSync, readFileSync } from "fs";
 import { resolve } from "path";
 import { Google } from "arctic";
@@ -136,54 +136,65 @@ async function validateApiKey(request: Request): Promise<AuthContext | null> {
   if (!header) return null;
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : null;
   if (!token || !token.startsWith("oc_")) return null;
-  const apiKey = await db.apiKey.findUnique({
-    where: { key: token },
-    select: { userId: true, accountId: true },
-  });
+  const apiKey = await db
+    .selectFrom("apiKeys")
+    .select(["userId", "accountId"])
+    .where("key", "=", token)
+    .executeTakeFirst();
   if (!apiKey) return null;
   return { userId: apiKey.userId, accountId: apiKey.accountId };
 }
 
 async function resolveLocalAuth(): Promise<AuthContext | null> {
-  let user = await db.user.findUnique({
-    where: { externalAuthId: LOCAL_AUTH_ID },
-    select: { id: true, memberships: { select: { accountId: true }, take: 1 } },
-  });
+  let user = await db
+    .selectFrom("users")
+    .select("id")
+    .where("externalAuthId", "=", LOCAL_AUTH_ID)
+    .executeTakeFirst();
 
   // Bootstrap local user + account on first request (fresh database)
   if (!user) {
-    user = await db.user.create({
-      data: {
+    user = await db
+      .insertInto("users")
+      .values({
+        id: generateId(),
         email: "local@onecli.dev",
         name: "Local User",
         externalAuthId: LOCAL_AUTH_ID,
-      },
-      select: {
-        id: true,
-        memberships: { select: { accountId: true }, take: 1 },
-      },
-    });
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
   }
 
-  if (user.memberships.length === 0) {
-    const account = await db.account.create({
-      data: {
-        name: "Local Account",
-        members: { create: { userId: user.id, role: "owner" } },
-      },
-      select: { id: true },
-    });
-    await db.apiKey.create({
-      data: {
+  const membership = await db
+    .selectFrom("accountMembers")
+    .select("accountId")
+    .where("userId", "=", user.id)
+    .executeTakeFirst();
+
+  if (!membership) {
+    const accountId = generateId();
+    await db
+      .insertInto("accounts")
+      .values({ id: accountId, name: "Local Account" })
+      .execute();
+    await db
+      .insertInto("accountMembers")
+      .values({ accountId, userId: user.id, role: "owner" })
+      .execute();
+    await db
+      .insertInto("apiKeys")
+      .values({
+        id: generateId(),
         key: generateApiKey(),
         userId: user.id,
-        accountId: account.id,
-      },
-    });
-    return { userId: user.id, accountId: account.id };
+        accountId,
+      })
+      .execute();
+    return { userId: user.id, accountId };
   }
 
-  return { userId: user.id, accountId: user.memberships[0]!.accountId };
+  return { userId: user.id, accountId: membership.accountId };
 }
 
 async function loadCaCertificate(): Promise<string | null> {
@@ -309,17 +320,20 @@ const app = new Elysia()
             if (exp && exp < Math.floor(Date.now() / 1000)) {
               // Token expired — treat as unauthenticated
             } else {
-              const user = await db.user.findUnique({
-                where: { externalAuthId: payload.authId as string },
-                select: {
-                  id: true,
-                  memberships: { select: { accountId: true }, take: 1 },
-                },
-              });
-              if (user && user.memberships.length > 0) {
+              const row = await db
+                .selectFrom("users")
+                .innerJoin(
+                  "accountMembers",
+                  "accountMembers.userId",
+                  "users.id",
+                )
+                .select(["users.id as userId", "accountMembers.accountId"])
+                .where("users.externalAuthId", "=", payload.authId as string)
+                .executeTakeFirst();
+              if (row) {
                 auth = {
-                  userId: user.id,
-                  accountId: user.memberships[0]!.accountId,
+                  userId: row.userId,
+                  accountId: row.accountId,
                 };
                 authSource = "cookie";
                 jwtCsrf = (payload.csrf as string) ?? null;
@@ -581,10 +595,11 @@ const app = new Elysia()
   .get("/api/auth/session", async ({ auth, jwt: jwtService, set }) => {
     // In local mode, auth is already resolved from the derive block
     if (AUTH_MODE === "local" && auth) {
-      const user = await db.user.findUnique({
-        where: { id: auth.userId },
-        select: { id: true, email: true, name: true },
-      });
+      const user = await db
+        .selectFrom("users")
+        .select(["id", "email", "name"])
+        .where("id", "=", auth.userId)
+        .executeTakeFirst();
       return user ?? { error: "User not found" };
     }
 
@@ -595,85 +610,100 @@ const app = new Elysia()
     }
 
     // Ensure account + defaults exist (idempotent)
-    let membership = await db.accountMember.findFirst({
-      where: { userId: auth.userId },
-      select: { accountId: true, account: { select: { demoSeeded: true } } },
-    });
+    let memberRow = await db
+      .selectFrom("accountMembers")
+      .innerJoin("accounts", "accounts.id", "accountMembers.accountId")
+      .select(["accountMembers.accountId", "accounts.demoSeeded"])
+      .where("accountMembers.userId", "=", auth.userId)
+      .executeTakeFirst();
 
-    if (!membership) {
-      const user = await db.user.findUnique({
-        where: { id: auth.userId },
-        select: { name: true },
-      });
-      const account = await db.account.create({
-        data: { name: user?.name },
-        select: { id: true, demoSeeded: true },
-      });
-      await db.accountMember.create({
-        data: { accountId: account.id, userId: auth.userId, role: "owner" },
-      });
-      await db.apiKey.create({
-        data: {
+    if (!memberRow) {
+      const user = await db
+        .selectFrom("users")
+        .select("name")
+        .where("id", "=", auth.userId)
+        .executeTakeFirst();
+      const accountId = generateId();
+      await db
+        .insertInto("accounts")
+        .values({ id: accountId, name: user?.name ?? null })
+        .execute();
+      await db
+        .insertInto("accountMembers")
+        .values({
+          accountId,
+          userId: auth.userId,
+          role: "owner",
+        })
+        .execute();
+      await db
+        .insertInto("apiKeys")
+        .values({
+          id: generateId(),
           key: generateApiKey(),
           userId: auth.userId,
-          accountId: account.id,
-        },
+          accountId,
+        })
+        .execute();
+      memberRow = { accountId, demoSeeded: false };
+    }
+
+    const accountId = memberRow.accountId;
+
+    const hasDefault = await db
+      .selectFrom("agents")
+      .select("id")
+      .where("accountId", "=", accountId)
+      .where("isDefault", "=", true)
+      .executeTakeFirst();
+
+    const needsSeeding = !memberRow.demoSeeded;
+
+    if (!hasDefault || needsSeeding) {
+      await db.transaction().execute(async (trx) => {
+        if (!hasDefault) {
+          await trx
+            .insertInto("agents")
+            .values({
+              id: generateId(),
+              name: DEFAULT_AGENT_NAME,
+              accessToken: generateAccessToken(),
+              isDefault: true,
+              accountId,
+            })
+            .execute();
+        }
+        if (needsSeeding) {
+          await trx
+            .insertInto("secrets")
+            .values({
+              id: generateId(),
+              name: DEMO_SECRET_NAME,
+              type: "generic",
+              encryptedValue: await cryptoService.encrypt(DEMO_SECRET_VALUE),
+              hostPattern: "httpbin.org",
+              pathPattern: "/anything/*",
+              injectionConfig: JSON.stringify({
+                headerName: "Authorization",
+                valueFormat: "Bearer {value}",
+              }),
+              accountId,
+            })
+            .execute();
+          await trx
+            .updateTable("accounts")
+            .set({ demoSeeded: true })
+            .where("id", "=", accountId)
+            .execute();
+        }
       });
-      membership = {
-        accountId: account.id,
-        account: { demoSeeded: account.demoSeeded },
-      };
     }
 
-    const accountId = membership.accountId;
-    const ops = [];
-
-    const hasDefault = await db.agent.findFirst({
-      where: { accountId, isDefault: true },
-      select: { id: true },
-    });
-    if (!hasDefault) {
-      ops.push(
-        db.agent.create({
-          data: {
-            name: DEFAULT_AGENT_NAME,
-            accessToken: generateAccessToken(),
-            isDefault: true,
-            accountId,
-          },
-        }),
-      );
-    }
-
-    if (!membership.account.demoSeeded) {
-      ops.push(
-        db.secret.create({
-          data: {
-            name: DEMO_SECRET_NAME,
-            type: "generic",
-            encryptedValue: await cryptoService.encrypt(DEMO_SECRET_VALUE),
-            hostPattern: "httpbin.org",
-            pathPattern: "/anything/*",
-            injectionConfig: {
-              headerName: "Authorization",
-              valueFormat: "Bearer {value}",
-            },
-            accountId,
-          },
-        }),
-        db.account.update({
-          where: { id: accountId },
-          data: { demoSeeded: true },
-        }),
-      );
-    }
-
-    if (ops.length > 0) await db.$transaction(ops);
-
-    const user = await db.user.findUnique({
-      where: { id: auth.userId },
-      select: { id: true, email: true, name: true },
-    });
+    const user = await db
+      .selectFrom("users")
+      .select(["id", "email", "name"])
+      .where("id", "=", auth.userId)
+      .executeTakeFirst();
     return user;
   })
 
@@ -733,16 +763,22 @@ const app = new Elysia()
     };
 
     // Upsert user
-    const user = await db.user.upsert({
-      where: { email: userInfo.email },
-      create: {
+    const user = await db
+      .insertInto("users")
+      .values({
+        id: generateId(),
         externalAuthId: userInfo.sub,
         email: userInfo.email,
-        name: userInfo.name,
-      },
-      update: { externalAuthId: userInfo.sub, name: userInfo.name },
-      select: { id: true, email: true, name: true },
-    });
+        name: userInfo.name ?? null,
+      })
+      .onConflict((oc) =>
+        oc.column("email").doUpdateSet({
+          externalAuthId: userInfo.sub,
+          name: userInfo.name ?? null,
+        }),
+      )
+      .returning(["id", "email", "name"])
+      .executeTakeFirstOrThrow();
 
     // Issue JWT with expiry
     const csrfToken = generateCsrfToken();
@@ -827,14 +863,18 @@ const app = new Elysia()
     const agentIdentifier = (query as Record<string, string>).agent;
 
     let agent = agentIdentifier
-      ? await db.agent.findFirst({
-          where: { accountId: auth.accountId, identifier: agentIdentifier },
-          select: { id: true, accessToken: true, secretMode: true },
-        })
-      : await db.agent.findFirst({
-          where: { accountId: auth.accountId, isDefault: true },
-          select: { id: true, accessToken: true, secretMode: true },
-        });
+      ? await db
+          .selectFrom("agents")
+          .select(["id", "accessToken", "secretMode"])
+          .where("accountId", "=", auth.accountId)
+          .where("identifier", "=", agentIdentifier)
+          .executeTakeFirst()
+      : await db
+          .selectFrom("agents")
+          .select(["id", "accessToken", "secretMode"])
+          .where("accountId", "=", auth.accountId)
+          .where("isDefault", "=", true)
+          .executeTakeFirst();
 
     if (!agent && agentIdentifier) {
       set.status = 404;
@@ -842,15 +882,17 @@ const app = new Elysia()
     }
 
     if (!agent) {
-      agent = await db.agent.create({
-        data: {
+      agent = await db
+        .insertInto("agents")
+        .values({
+          id: generateId(),
           name: DEFAULT_AGENT_NAME,
           accessToken: generateAccessToken(),
           isDefault: true,
           accountId: auth.accountId,
-        },
-        select: { id: true, accessToken: true, secretMode: true },
-      });
+        })
+        .returning(["id", "accessToken", "secretMode"])
+        .executeTakeFirstOrThrow();
     }
 
     const gatewayHost = getGatewayHost();
@@ -866,17 +908,26 @@ const app = new Elysia()
 
     const anthropicSecret =
       agent.secretMode === "selective"
-        ? await db.secret.findFirst({
-            where: {
-              type: "anthropic",
-              agentSecrets: { some: { agentId: agent.id } },
-            },
-            select: { metadata: true },
-          })
-        : await db.secret.findFirst({
-            where: { accountId: auth.accountId, type: "anthropic" },
-            select: { metadata: true },
-          });
+        ? await db
+            .selectFrom("secrets")
+            .select("metadata")
+            .where("type", "=", "anthropic")
+            .where((eb) =>
+              eb.exists(
+                eb
+                  .selectFrom("agentSecrets")
+                  .whereRef("agentSecrets.secretId", "=", "secrets.id")
+                  .where("agentSecrets.agentId", "=", agent!.id)
+                  .select(eb.lit(1).as("one")),
+              ),
+            )
+            .executeTakeFirst()
+        : await db
+            .selectFrom("secrets")
+            .select("metadata")
+            .where("accountId", "=", auth.accountId)
+            .where("type", "=", "anthropic")
+            .executeTakeFirst();
 
     const meta = parseAnthropicMetadata(anthropicSecret?.metadata);
     const authEnv: Record<string, string> =

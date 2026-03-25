@@ -30,7 +30,6 @@ RUN pnpm install --frozen-lockfile
 
 COPY . .
 
-RUN pnpm --filter @onecli/db exec prisma generate
 RUN cd apps/dashboard && bun run build
 
 # ──────────────────────────────────────────────
@@ -50,10 +49,6 @@ RUN jq 'del(.dependencies["@onecli/db"], .dependencies["@onecli/services"]) | de
     bun install --production --no-save && \
     rm -rf /root/.bun/install/cache && \
     apk del jq
-
-# Prisma generated client only (query engine ~20MB, no CLI/engines)
-COPY --from=builder /app/node_modules/.pnpm/@prisma+client*/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/.pnpm/@prisma+client*/node_modules/@prisma ./node_modules/@prisma
 
 # Built SPA
 COPY --from=builder --chown=nonroot:nonroot /app/apps/dashboard/dist ./apps/dashboard/dist
