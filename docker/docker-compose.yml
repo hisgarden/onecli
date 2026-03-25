@@ -81,7 +81,7 @@ services:
       postgres:
         condition: service_healthy
       api:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "10255:10255"
     environment:
