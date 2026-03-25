@@ -76,11 +76,11 @@ apps/
   gateway/        # Rust gateway (credential injection, port 10255)
 packages/
   services/       # Shared service layer (business logic, validations, crypto)
-  db/             # Prisma ORM + migrations
+  db/             # Kysely query builder + SQL migrations
   ui/             # Shared UI components (shadcn/ui)
 docker/
-  Dockerfile.bun      # API + SPA image (~80MB)
-  Dockerfile.gateway  # Standalone gateway image (~20MB)
+  Dockerfile.bun      # API + SPA image (~230MB)
+  Dockerfile.gateway  # Standalone gateway image (~38MB)
 ```
 
 ## Local Development
@@ -96,9 +96,7 @@ docker/
 mise install
 pnpm install
 cp .env.example .env
-pnpm db:generate
 pnpm db:up          # Start PostgreSQL
-pnpm db:migrate     # Apply migrations
 pnpm dev
 ```
 
@@ -115,9 +113,6 @@ Dashboard at **http://localhost:10254**, gateway at **http://localhost:10255**.
 | `pnpm check`         | Type check + format check          |
 | `pnpm db:up`         | Start PostgreSQL (Docker)          |
 | `pnpm db:down`       | Stop PostgreSQL                    |
-| `pnpm db:generate`   | Generate Prisma client             |
-| `pnpm db:migrate`    | Run database migrations            |
-| `pnpm db:studio`     | Open Prisma Studio                 |
 | `pnpm db:backup`     | Back up database to gzip           |
 | `pnpm db:restore`    | Restore database from backup       |
 | `pnpm test`          | Run all tests (services + API)     |
