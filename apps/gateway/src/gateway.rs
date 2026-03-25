@@ -54,6 +54,18 @@ pub struct GatewayServer {
     port: u16,
 }
 
+/// Build the HTTP client used for upstream requests.
+///
+/// - Redirects are disabled so 3xx responses are forwarded to the client as-is.
+/// - Invalid certs are optionally accepted via `GATEWAY_DANGER_ACCEPT_INVALID_CERTS`.
+fn build_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .danger_accept_invalid_certs(std::env::var("GATEWAY_DANGER_ACCEPT_INVALID_CERTS").is_ok())
+        .build()
+        .expect("build HTTP client")
+}
+
 impl GatewayServer {
     pub fn new(
         ca: CertificateAuthority,
@@ -64,12 +76,7 @@ impl GatewayServer {
     ) -> Self {
         let state = GatewayState {
             ca: Arc::new(ca),
-            http_client: reqwest::Client::builder()
-                .danger_accept_invalid_certs(
-                    std::env::var("GATEWAY_DANGER_ACCEPT_INVALID_CERTS").is_ok(),
-                )
-                .build()
-                .expect("build HTTP client"),
+            http_client: build_http_client(),
             policy_engine,
             cache,
             vault_service,
@@ -705,6 +712,52 @@ fn strip_port(host: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
+
+    /// Verify that the production HTTP client does not follow redirects.
+    /// A proxy must forward 3xx responses to the client so the client's HTTP
+    /// library can see the full redirect chain (intermediate headers, etc.).
+    #[tokio::test]
+    async fn http_client_does_not_follow_redirects() {
+        // Arrange: spin up a tiny server that always returns 302.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let addr = listener.local_addr().expect("local addr");
+
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                use std::io::{Read, Write};
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let resp = "HTTP/1.1 302 Found\r\n\
+                            Location: http://example.com/other\r\n\
+                            X-Repo-Commit: abc123\r\n\
+                            Content-Length: 0\r\n\r\n";
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+
+        // Act: use the same client the gateway uses in production.
+        let client = build_http_client();
+        let resp = client
+            .get(format!("http://{addr}/test"))
+            .send()
+            .await
+            .expect("send request");
+
+        // Assert: 302 is returned as-is, not followed.
+        assert_eq!(resp.status(), 302, "proxy client must not follow redirects");
+        assert_eq!(
+            resp.headers().get("location").and_then(|v| v.to_str().ok()),
+            Some("http://example.com/other"),
+        );
+        // Intermediate headers like X-Repo-Commit must be visible to the client.
+        assert_eq!(
+            resp.headers()
+                .get("x-repo-commit")
+                .and_then(|v| v.to_str().ok()),
+            Some("abc123"),
+        );
+    }
 
     // ── strip_port ──────────────────────────────────────────────────────
 
