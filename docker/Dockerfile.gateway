@@ -25,11 +25,12 @@ COPY apps/gateway/ .
 RUN cargo build --release
 
 # ──────────────────────────────────────────────
-# Stage 2: Minimal runtime
+# Stage 2: Minimal runtime (Chainguard zero-CVE)
 # ──────────────────────────────────────────────
-FROM alpine:3.21 AS runner
-RUN apk add --no-cache ca-certificates && \
-    adduser -D -u 1001 onecli
+FROM cgr.dev/chainguard/wolfi-base:latest AS runner
+
+# wget for healthcheck (not in base busybox)
+RUN apk update && apk add --no-cache wget && rm -rf /var/cache/apk/*
 
 COPY --from=builder /build/target/release/onecli-gateway /usr/local/bin/onecli-gateway
 
@@ -37,10 +38,10 @@ COPY --from=builder /build/target/release/onecli-gateway /usr/local/bin/onecli-g
 COPY docker/entrypoint-gateway.sh /usr/local/bin/entrypoint-gateway.sh
 RUN chmod +x /usr/local/bin/entrypoint-gateway.sh
 
-RUN mkdir -p /app/data && chown onecli:onecli /app/data
+RUN mkdir -p /app/data && chown nonroot:nonroot /app/data
 VOLUME ["/app/data"]
 
-USER onecli
+USER nonroot
 EXPOSE 10255
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \

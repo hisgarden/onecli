@@ -2,7 +2,7 @@
 # Build context: repo root
 #
 # Stage 1: node+pnpm for install + build (lockfile compat)
-# Stage 2: bun for runtime — API prod deps + Prisma client only
+# Stage 2: Chainguard wolfi-base for zero-CVE runtime
 #
 # Usage:
 #   docker build -f docker/Dockerfile.bun -t onecli-api .
@@ -34,20 +34,19 @@ RUN pnpm --filter @onecli/db exec prisma generate
 RUN cd apps/dashboard && bun run build
 
 # ──────────────────────────────────────────────
-# Stage 2: Production runtime (Bun)
+# Stage 2: Production runtime (Chainguard zero-CVE)
 # ──────────────────────────────────────────────
-FROM oven/bun:1-alpine AS runner
+FROM cgr.dev/chainguard/wolfi-base:latest AS runner
 WORKDIR /app
 
-# psql for lightweight migration runner (5MB vs 100MB Prisma CLI)
-RUN apk add --no-cache postgresql-client
-
-RUN adduser -D -u 1001 onecli
+# Install runtime dependencies (bun, psql for migrations, jq for dep stripping)
+RUN apk update && \
+    apk add --no-cache bun postgresql-client jq wget && \
+    rm -rf /var/cache/apk/*
 
 # Install only API runtime deps (strip workspace + dev refs)
 COPY --from=builder /app/apps/api/package.json /tmp/pkg.json
-RUN apk add --no-cache jq && \
-    jq 'del(.dependencies["@onecli/db"], .dependencies["@onecli/services"]) | del(.devDependencies)' /tmp/pkg.json > ./package.json && \
+RUN jq 'del(.dependencies["@onecli/db"], .dependencies["@onecli/services"]) | del(.devDependencies)' /tmp/pkg.json > ./package.json && \
     bun install --production --no-save && \
     rm -rf /root/.bun/install/cache && \
     apk del jq
@@ -57,41 +56,41 @@ COPY --from=builder /app/node_modules/.pnpm/@prisma+client*/node_modules/.prisma
 COPY --from=builder /app/node_modules/.pnpm/@prisma+client*/node_modules/@prisma ./node_modules/@prisma
 
 # Built SPA
-COPY --from=builder --chown=onecli:onecli /app/apps/dashboard/dist ./apps/dashboard/dist
+COPY --from=builder --chown=nonroot:nonroot /app/apps/dashboard/dist ./apps/dashboard/dist
 
 # API source
-COPY --from=builder --chown=onecli:onecli /app/apps/api/src ./apps/api/src
-COPY --from=builder --chown=onecli:onecli /app/apps/api/package.json ./apps/api/package.json
+COPY --from=builder --chown=nonroot:nonroot /app/apps/api/src ./apps/api/src
+COPY --from=builder --chown=nonroot:nonroot /app/apps/api/package.json ./apps/api/package.json
 
 # Service layer
-COPY --from=builder --chown=onecli:onecli /app/packages/services/src ./packages/services/src
-COPY --from=builder --chown=onecli:onecli /app/packages/services/package.json ./packages/services/package.json
+COPY --from=builder --chown=nonroot:nonroot /app/packages/services/src ./packages/services/src
+COPY --from=builder --chown=nonroot:nonroot /app/packages/services/package.json ./packages/services/package.json
 
 # DB package (source + migrations SQL — no Prisma CLI needed)
-COPY --from=builder --chown=onecli:onecli /app/packages/db/src ./packages/db/src
-COPY --from=builder --chown=onecli:onecli /app/packages/db/package.json ./packages/db/package.json
-COPY --from=builder --chown=onecli:onecli /app/packages/db/prisma ./packages/db/prisma
+COPY --from=builder --chown=nonroot:nonroot /app/packages/db/src ./packages/db/src
+COPY --from=builder --chown=nonroot:nonroot /app/packages/db/package.json ./packages/db/package.json
+COPY --from=builder --chown=nonroot:nonroot /app/packages/db/prisma ./packages/db/prisma
 
 # UI types
-COPY --from=builder --chown=onecli:onecli /app/packages/ui/src ./packages/ui/src
-COPY --from=builder --chown=onecli:onecli /app/packages/ui/package.json ./packages/ui/package.json
+COPY --from=builder --chown=nonroot:nonroot /app/packages/ui/src ./packages/ui/src
+COPY --from=builder --chown=nonroot:nonroot /app/packages/ui/package.json ./packages/ui/package.json
 
 # Workspace root + symlinks for @onecli/* module resolution
-COPY --chown=onecli:onecli package.json ./
+COPY --chown=nonroot:nonroot package.json ./
 RUN mkdir -p node_modules/@onecli && \
     ln -s /app/packages/db node_modules/@onecli/db && \
     ln -s /app/packages/services node_modules/@onecli/services && \
     ln -s /app/packages/ui node_modules/@onecli/ui
 
 # Migration runner + entrypoint
-COPY --chown=onecli:onecli docker/migrate.sh ./migrate.sh
-COPY --chown=onecli:onecli docker/entrypoint-bun.sh ./entrypoint.sh
+COPY --chown=nonroot:nonroot docker/migrate.sh ./migrate.sh
+COPY --chown=nonroot:nonroot docker/entrypoint-bun.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh ./migrate.sh
 
-RUN mkdir -p /app/data && chown onecli:onecli /app/data
+RUN mkdir -p /app/data && chown nonroot:nonroot /app/data
 VOLUME ["/app/data"]
 
-USER onecli
+USER nonroot
 
 ENV NODE_ENV=production
 ENV PORT=10254

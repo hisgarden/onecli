@@ -34,10 +34,10 @@ services:
     networks:
       - onecli
 
-  # Init: ensure shared data volume is owned by UID 1001 (onecli user)
+  # Init: ensure shared data volume is owned by UID 65532 (Chainguard nonroot)
   init:
-    image: alpine:3.21
-    command: sh -c "chown -R 1001:1001 /app/data"
+    image: cgr.dev/chainguard/wolfi-base:latest
+    command: sh -c "chown -R 65532:65532 /app/data"
     volumes:
       - app-data:/app/data
 
