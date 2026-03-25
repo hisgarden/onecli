@@ -87,7 +87,7 @@ docker/
 
 ### Prerequisites
 
-- **[mise](https://mise.jdx.dev)** (installs Bun, Node.js, pnpm, Rust)
+- **[mise](https://mise.jdx.dev)** (installs Bun, pnpm, Rust)
 - **Docker** (for PostgreSQL)
 
 ### Setup
