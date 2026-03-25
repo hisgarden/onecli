@@ -145,11 +145,44 @@ async function validateApiKey(request: Request): Promise<AuthContext | null> {
 }
 
 async function resolveLocalAuth(): Promise<AuthContext | null> {
-  const user = await db.user.findUnique({
+  let user = await db.user.findUnique({
     where: { externalAuthId: LOCAL_AUTH_ID },
     select: { id: true, memberships: { select: { accountId: true }, take: 1 } },
   });
-  if (!user || user.memberships.length === 0) return null;
+
+  // Bootstrap local user + account on first request (fresh database)
+  if (!user) {
+    user = await db.user.create({
+      data: {
+        email: "local@onecli.dev",
+        name: "Local User",
+        externalAuthId: LOCAL_AUTH_ID,
+      },
+      select: {
+        id: true,
+        memberships: { select: { accountId: true }, take: 1 },
+      },
+    });
+  }
+
+  if (user.memberships.length === 0) {
+    const account = await db.account.create({
+      data: {
+        name: "Local Account",
+        members: { create: { userId: user.id, role: "owner" } },
+      },
+      select: { id: true },
+    });
+    await db.apiKey.create({
+      data: {
+        key: generateApiKey(),
+        userId: user.id,
+        accountId: account.id,
+      },
+    });
+    return { userId: user.id, accountId: account.id };
+  }
+
   return { userId: user.id, accountId: user.memberships[0]!.accountId };
 }
 
