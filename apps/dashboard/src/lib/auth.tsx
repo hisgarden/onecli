@@ -2,7 +2,6 @@ import {
   createContext,
   useContext,
   useEffect,
-  useRef,
   useState,
   useCallback,
   type ReactNode,
@@ -28,25 +27,16 @@ const AuthContext = createContext<AuthContextValue>({
   signOut: async () => {},
 });
 
-/** Interval for silent session refresh (every 15 minutes). */
-const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
-
-function getCsrfToken(): string | undefined {
-  const match = document.cookie.match(/(?:^|; )(?:__Host-csrf|csrf)=([^;]*)/);
-  return match?.[1];
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<Omit<AuthContextValue, "signOut">>({
     isAuthenticated: false,
     isLoading: true,
     user: null,
   });
-  const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Initial session check
+  // Initial session check — calls our /api/session which bootstraps account + defaults
   useEffect(() => {
-    fetch("/api/auth/session", { credentials: "include" })
+    fetch("/api/session", { credentials: "include" })
       .then(async (res) => {
         if (res.ok) {
           const user = await res.json();
@@ -64,35 +54,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
   }, []);
 
-  // Silent session refresh — keeps JWT alive while user is active
-  useEffect(() => {
-    if (!state.isAuthenticated) return;
-
-    const refresh = async () => {
-      try {
-        const csrf = getCsrfToken();
-        const res = await fetch("/api/auth/refresh", {
-          method: "POST",
-          credentials: "include",
-          headers: csrf ? { "x-csrf-token": csrf } : {},
-        });
-        if (res.status === 401) {
-          // Session expired — sign out
-          setState({ isAuthenticated: false, isLoading: false, user: null });
-        }
-      } catch {
-        // Network error — don't sign out, will retry next interval
-      }
-    };
-
-    refreshTimer.current = setInterval(refresh, REFRESH_INTERVAL_MS);
-    return () => {
-      if (refreshTimer.current) clearInterval(refreshTimer.current);
-    };
-  }, [state.isAuthenticated]);
+  // Session refresh is handled automatically by Better Auth's updateAge config.
+  // No manual refresh interval needed.
 
   const signOut = useCallback(async () => {
-    window.location.href = "/auth/signout";
+    try {
+      await fetch("/api/auth/sign-out", {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      // Best-effort signout
+    }
+    setState({ isAuthenticated: false, isLoading: false, user: null });
+    window.location.href = "/";
   }, []);
 
   return (
