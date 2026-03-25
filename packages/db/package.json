@@ -17,11 +17,15 @@
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
-    "@prisma/client": "^6.9.0"
+    "@paralleldrive/cuid2": "^3.3.0",
+    "@prisma/client": "^6.9.0",
+    "kysely": "^0.28.14",
+    "pg": "^8.20.0"
   },
   "devDependencies": {
     "@onecli/typescript-config": "workspace:*",
     "@types/node": "^22.15.3",
+    "@types/pg": "^8.20.0",
     "prisma": "^6.9.0",
     "typescript": "5.9.2"
   }
