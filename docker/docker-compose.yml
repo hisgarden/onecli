@@ -12,6 +12,7 @@
 services:
   postgres:
     image: postgres:18-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-onecli}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-onecli}
@@ -45,6 +46,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.bun
+    restart: unless-stopped
     depends_on:
       init:
         condition: service_completed_successfully
@@ -77,6 +79,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.gateway
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
