@@ -34,6 +34,9 @@ pub(crate) trait CacheStore: Send + Sync {
     #[allow(dead_code)]
     async fn del(&self, key: &str);
 
+    /// Delete all keys matching a prefix.
+    async fn del_by_prefix(&self, prefix: &str);
+
     /// Atomically increment a counter at `key`.
     /// Sets TTL only on first increment (new key / expired key).
     /// Returns the new count, or `None` on error (graceful fallback).
@@ -123,6 +126,18 @@ impl CacheStore for InMemoryCacheStore {
 
     async fn del(&self, key: &str) {
         self.map.remove(key);
+    }
+
+    async fn del_by_prefix(&self, prefix: &str) {
+        let keys: Vec<String> = self
+            .map
+            .iter()
+            .filter(|entry| entry.key().starts_with(prefix))
+            .map(|entry| entry.key().clone())
+            .collect();
+        for key in keys {
+            self.map.remove(&key);
+        }
     }
 
     async fn incr(&self, key: &str, ttl_secs: u64) -> Option<u64> {
