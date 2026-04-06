@@ -9,6 +9,7 @@
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use ring::aead;
+use ring::rand::{SecureRandom, SystemRandom};
 
 const KEY_LEN: usize = 32;
 const IV_LEN: usize = 12;
@@ -45,6 +46,35 @@ impl CryptoService {
         let key = aead::LessSafeKey::new(unbound_key);
 
         Ok(Self { key })
+    }
+
+    /// Encrypt a plaintext value into `{iv_b64}:{authTag_b64}:{ciphertext_b64}` format.
+    /// Compatible with the Node.js/Bun `CryptoService` in `packages/services`.
+    pub async fn encrypt(&self, plaintext: &str) -> Result<String> {
+        let rng = SystemRandom::new();
+        let mut iv = [0u8; IV_LEN];
+        rng.fill(&mut iv)
+            .map_err(|_| anyhow::anyhow!("failed to generate random IV"))?;
+
+        let nonce = aead::Nonce::try_assume_unique_for_key(&iv)
+            .map_err(|_| anyhow::anyhow!("invalid nonce"))?;
+
+        let mut in_out = plaintext.as_bytes().to_vec();
+        self.key
+            .seal_in_place_append_tag(nonce, aead::Aad::empty(), &mut in_out)
+            .map_err(|_| anyhow::anyhow!("encryption failed"))?;
+
+        // ring appends the 16-byte auth tag after the ciphertext
+        let ciphertext = &in_out[..plaintext.len()];
+        let auth_tag = &in_out[plaintext.len()..];
+
+        let b64 = &base64::engine::general_purpose::STANDARD;
+        Ok(format!(
+            "{}:{}:{}",
+            b64.encode(iv),
+            b64.encode(auth_tag),
+            b64.encode(ciphertext),
+        ))
     }
 
     /// Decrypt a value in the format `{iv_b64}:{authTag_b64}:{ciphertext_b64}`.
