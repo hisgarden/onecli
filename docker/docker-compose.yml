@@ -1,5 +1,5 @@
-# OneCLI — quick start
-#
+name: onecli
+
 # Starts the full stack: Elysia API (serves dashboard SPA), Rust gateway, PostgreSQL.
 #
 # Usage:
