@@ -38,7 +38,7 @@ for dir in $(ls -1d "$MIGRATIONS_DIR"/[0-9]* 2>/dev/null | sort); do
   fi
 
   echo "Applying migration: $migration_name"
-  checksum=$(sha256sum "$sql_file" | cut -d' ' -f1)
+  checksum=$( (sha256sum "$sql_file" 2>/dev/null || shasum -a 256 "$sql_file") | cut -d' ' -f1)
 
   # Record start
   psql "$DATABASE_URL" -q -c "INSERT INTO _prisma_migrations (migration_name, checksum, started_at) VALUES ('$migration_name', '$checksum', now()) ON CONFLICT (migration_name) DO NOTHING"
