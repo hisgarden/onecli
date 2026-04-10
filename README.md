@@ -93,36 +93,36 @@ docker/
 
 ### Prerequisites
 
-- **[mise](https://mise.jdx.dev)** (installs Bun, pnpm, Rust)
+- **[mise](https://mise.jdx.dev)** (installs Bun, Rust)
 - **Docker** (for PostgreSQL)
 
 ### Setup
 
 ```bash
 mise install
-pnpm install
+bun install
 cp .env.example .env
-pnpm db:up          # Start PostgreSQL
-pnpm dev
+bun run db:up       # Start PostgreSQL
+bun run dev
 ```
 
 Dashboard at **http://localhost:10254**, gateway at **http://localhost:10255**.
 
 ### Commands
 
-| Command              | Description                        |
-| -------------------- | ---------------------------------- |
-| `pnpm dev`           | Start API + dashboard in dev mode  |
-| `pnpm dev:api`       | Start Elysia API (Bun, port 10254) |
-| `pnpm dev:dashboard` | Start Vite dashboard (port 3000)   |
-| `pnpm build`         | Build dashboard SPA                |
-| `pnpm check`         | Type check + format check          |
-| `pnpm db:up`         | Start PostgreSQL (Docker)          |
-| `pnpm db:down`       | Stop PostgreSQL                    |
-| `pnpm db:backup`     | Back up database to gzip           |
-| `pnpm db:restore`    | Restore database from backup       |
-| `pnpm test`          | Run all tests (services + API)     |
-| `pnpm test:unit`     | Run service layer unit tests       |
+| Command                 | Description                        |
+| ----------------------- | ---------------------------------- |
+| `bun run dev`           | Start API + dashboard in dev mode  |
+| `bun run dev:api`       | Start Elysia API (Bun, port 10254) |
+| `bun run dev:dashboard` | Start Vite dashboard (port 3000)   |
+| `bun run build`         | Build dashboard SPA                |
+| `bun run check`         | Type check + format check          |
+| `bun run db:up`         | Start PostgreSQL (Docker)          |
+| `bun run db:down`       | Stop PostgreSQL                    |
+| `bun run db:backup`     | Back up database to gzip           |
+| `bun run db:restore`    | Restore database from backup       |
+| `bun run test`          | Run all tests (services + API)     |
+| `bun run test:unit`     | Run service layer unit tests       |
 
 ## Configuration
 

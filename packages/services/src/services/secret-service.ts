@@ -14,6 +14,7 @@ const audit = logger.child({ component: "audit", service: "secret" });
 const SECRET_TYPE_LABELS: Record<string, string> = {
   anthropic: "Anthropic API Key",
   generic: "Generic Secret",
+  api_key: "API Key",
 };
 
 /**
@@ -80,13 +81,18 @@ export const createSecret = async (
   const encryptedValue = await cryptoService.encrypt(value);
   const preview = buildPreview(value);
   const pathPattern = input.pathPattern?.trim() || null;
-  const injectionConfig =
-    input.type === "generic" && input.injectionConfig
-      ? JSON.stringify({
-          headerName: input.injectionConfig.headerName.trim(),
-          valueFormat: input.injectionConfig.valueFormat?.trim() || "{value}",
-        })
-      : null;
+  let injectionConfig: string | null = null;
+  if (input.type === "generic" && input.injectionConfig) {
+    injectionConfig = JSON.stringify({
+      headerName: input.injectionConfig.headerName.trim(),
+      valueFormat: input.injectionConfig.valueFormat?.trim() || "{value}",
+    });
+  } else if (input.type === "api_key") {
+    injectionConfig = JSON.stringify({
+      headerName: "Authorization",
+      valueFormat: "Bearer {value}",
+    });
+  }
 
   const metadata =
     input.type === "anthropic"

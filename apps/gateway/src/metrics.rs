@@ -69,7 +69,9 @@ pub(crate) fn render() -> String {
     let encoder = TextEncoder::new();
     let metric_families = REGISTRY.gather();
     let mut buf = Vec::new();
-    encoder.encode(&metric_families, &mut buf).expect("encode metrics");
+    encoder
+        .encode(&metric_families, &mut buf)
+        .expect("encode metrics");
     String::from_utf8(buf).expect("metrics are valid utf8")
 }
 
@@ -81,10 +83,7 @@ mod tests {
     fn metrics_init_and_render() {
         // Separate registry for test isolation
         let registry = Registry::new();
-        let counter = IntCounterVec::new(
-            Opts::new("test_counter", "test"),
-            &["label"],
-        ).unwrap();
+        let counter = IntCounterVec::new(Opts::new("test_counter", "test"), &["label"]).unwrap();
         registry.register(Box::new(counter.clone())).unwrap();
 
         counter.with_label_values(&["foo"]).inc();

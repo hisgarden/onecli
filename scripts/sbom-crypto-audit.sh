@@ -48,7 +48,7 @@ echo "--- JS: checking for unapproved crypto packages ---"
 BLOCKED_JS_PACKAGES="crypto-js|sjcl|node-forge|tweetnacl|libsodium|libsodium-wrappers|sodium-native|bcrypt|bcryptjs|argon2|scrypt|scrypt-js"
 
 cd "$PROJECT_ROOT"
-JS_HITS=$(pnpm list --depth=Infinity 2>/dev/null | grep -iE "$BLOCKED_JS_PACKAGES" || true)
+JS_HITS=$(bun pm ls --all 2>/dev/null | grep -iE "$BLOCKED_JS_PACKAGES" || true)
 
 if [ -n "$JS_HITS" ]; then
   echo "FAIL: Unapproved JS crypto packages found:"
@@ -76,5 +76,6 @@ fi
 
 ################################################################################
 # Changelog:
+# 2026-04-08  Switch JS audit from `pnpm list` to `bun pm ls` (Phase 2 toolchain)
 # 2026-03-24  Initial creation — crypto dependency audit for SBOM compliance
 ################################################################################

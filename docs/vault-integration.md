@@ -14,7 +14,7 @@ Credentials never hit disk or the database. The vault is a fallback; server-stor
 
 ## Prerequisites
 
-- OneCLI running locally (`pnpm dev`) or via Docker
+- OneCLI running locally (`bun run dev`) or via Docker
 - [Bitwarden Agent Access CLI](https://github.com/bitwarden/agent-access/releases) (`aac`) installed
 - A Bitwarden account with credentials stored as login items (the password field is used for injection)
 

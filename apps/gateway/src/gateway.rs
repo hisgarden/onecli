@@ -144,8 +144,8 @@ impl GatewayServer {
     /// Supports comma-separated origins (e.g., "http://localhost:10254,https://app.onecli.dev").
     /// Falls back to `http://localhost:10254` if not set.
     fn parse_cors_origins() -> tower_http::cors::AllowOrigin {
-        let raw = std::env::var("CORS_ORIGIN")
-            .unwrap_or_else(|_| "http://localhost:10254".to_string());
+        let raw =
+            std::env::var("CORS_ORIGIN").unwrap_or_else(|_| "http://localhost:10254".to_string());
 
         let origins: Vec<HeaderValue> = raw
             .split(',')
@@ -251,10 +251,17 @@ async fn healthz() -> StatusCode {
 }
 
 /// Prometheus metrics endpoint — scraped by VictoriaMetrics.
-async fn metrics_handler() -> (StatusCode, [(hyper::header::HeaderName, &'static str); 1], String) {
+async fn metrics_handler() -> (
+    StatusCode,
+    [(hyper::header::HeaderName, &'static str); 1],
+    String,
+) {
     (
         StatusCode::OK,
-        [(hyper::header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        [(
+            hyper::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
         crate::metrics::render(),
     )
 }
@@ -341,7 +348,8 @@ fn generate_request_id() -> String {
     use ring::rand::{SecureRandom, SystemRandom};
     let rng = SystemRandom::new();
     let mut buf = [0u8; 8];
-    rng.fill(&mut buf).expect("generate random bytes for request ID");
+    rng.fill(&mut buf)
+        .expect("generate random bytes for request ID");
     hex::encode(buf)
 }
 
@@ -372,36 +380,43 @@ async fn handle_connect(
     // Extract agent token from Proxy-Authorization header.
     let agent_token = inject::extract_agent_token(&req).filter(|t| !t.is_empty());
 
-    let (mut intercept, mut injection_rules, policy_rules, account_id, secret_mode, matched_secrets_count, agent_id) =
-        if let Some(ref token) = agent_token {
-            match connect::resolve(token, &hostname, &state.policy_engine, &*state.cache).await {
-                Ok(resp) => (
-                    resp.intercept,
-                    resp.injection_rules,
-                    resp.policy_rules,
-                    resp.account_id,
-                    resp.secret_mode,
-                    resp.matched_secrets_count,
-                    resp.agent_id,
-                ),
-                Err(ConnectError::InvalidToken) => {
-                    crate::metrics::AUTH_FAILURES_TOTAL
-                        .with_label_values(&["invalid_token"])
-                        .inc();
-                    warn!(peer = %peer_addr, host = %host, "CONNECT rejected: invalid agent token");
-                    return Ok(respond_407());
-                }
-                Err(ConnectError::Internal(e)) => {
-                    warn!(peer = %peer_addr, host = %host, error = %e, "CONNECT rejected: internal error");
-                    let mut resp = Response::new(axum::body::Body::empty());
-                    *resp.status_mut() = StatusCode::BAD_GATEWAY;
-                    return Ok(resp);
-                }
+    let (
+        mut intercept,
+        mut injection_rules,
+        policy_rules,
+        account_id,
+        secret_mode,
+        matched_secrets_count,
+        agent_id,
+    ) = if let Some(ref token) = agent_token {
+        match connect::resolve(token, &hostname, &state.policy_engine, &*state.cache).await {
+            Ok(resp) => (
+                resp.intercept,
+                resp.injection_rules,
+                resp.policy_rules,
+                resp.account_id,
+                resp.secret_mode,
+                resp.matched_secrets_count,
+                resp.agent_id,
+            ),
+            Err(ConnectError::InvalidToken) => {
+                crate::metrics::AUTH_FAILURES_TOTAL
+                    .with_label_values(&["invalid_token"])
+                    .inc();
+                warn!(peer = %peer_addr, host = %host, "CONNECT rejected: invalid agent token");
+                return Ok(respond_407());
             }
-        } else {
-            // No auth — plain tunnel (no MITM, no injection)
-            (false, vec![], vec![], None, None, 0, None)
-        };
+            Err(ConnectError::Internal(e)) => {
+                warn!(peer = %peer_addr, host = %host, error = %e, "CONNECT rejected: internal error");
+                let mut resp = Response::new(axum::body::Body::empty());
+                *resp.status_mut() = StatusCode::BAD_GATEWAY;
+                return Ok(resp);
+            }
+        }
+    } else {
+        // No auth — plain tunnel (no MITM, no injection)
+        (false, vec![], vec![], None, None, 0, None)
+    };
 
     // Vault fallback: if no DB secrets matched, try vault providers for this user.
     if !intercept {
@@ -423,7 +438,11 @@ async fn handle_connect(
 
     // Record metrics
     let mode_label = if intercept { "mitm" } else { "tunnel" };
-    let auth_label = if agent_token.is_some() { "true" } else { "false" };
+    let auth_label = if agent_token.is_some() {
+        "true"
+    } else {
+        "false"
+    };
     crate::metrics::CONNECT_TOTAL
         .with_label_values(&[mode_label, auth_label])
         .inc();
@@ -621,8 +640,10 @@ async fn mitm(
                 let token = Arc::clone(&agent_token);
                 let rid = Arc::clone(&request_id);
                 async move {
-                    forward_request(req, &host, "https", client, &inj_rules, &pol_rules, &*cache, &token, &rid)
-                        .await
+                    forward_request(
+                        req, &host, "https", client, &inj_rules, &pol_rules, &*cache, &token, &rid,
+                    )
+                    .await
                 }
             }),
         )

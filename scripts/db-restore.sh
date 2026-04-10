@@ -57,11 +57,12 @@ echo "--- Restore complete ---"
 echo ""
 echo "Next steps:"
 echo "  1. Run migrations to apply any newer schema changes:"
-echo "     pnpm db:migrate"
+echo "     cd packages/db && bunx prisma migrate deploy"
 echo "  2. Verify the restore:"
-echo "     pnpm db:studio"
+echo "     cd packages/db && bunx prisma studio"
 
 ################################################################################
 # Changelog:
+# 2026-04-08  Update guidance messages: pnpm → bunx prisma (Phase 2 toolchain)
 # 2026-03-24  Initial creation — pg_dump restore script
 ################################################################################

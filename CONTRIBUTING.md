@@ -15,24 +15,23 @@ To ensure a positive and inclusive environment, please read our [Code of Conduct
 ```bash
 git clone https://github.com/onecli/onecli.git
 cd onecli
-pnpm install
+bun install
 cp .env.example .env
-pnpm db:generate
-pnpm db:up          # Start PostgreSQL
-pnpm db:migrate     # Apply migrations
+bun run db:up                                  # Start PostgreSQL
+bun run --filter @onecli/db migrate:deploy     # Apply migrations
 ```
 
-**Bun workflow (recommended):**
+**Run API + dashboard:**
 
 ```bash
-pnpm dev:api         # Elysia API on port 10254
-pnpm dev:dashboard   # Vite SPA on port 3000
+bun run dev:api         # Elysia API on port 10254
+bun run dev:dashboard   # Vite SPA on port 3000
 ```
 
-**Legacy workflow:**
+Or both at once:
 
 ```bash
-pnpm dev             # Next.js + gateway via Turborepo
+bun run dev
 ```
 
 See the [README](README.md) for more details on prerequisites and configuration.
@@ -55,28 +54,27 @@ We actively welcome your Pull Requests! A couple of things to keep in mind befor
 Before submitting your PR, please run these checks locally:
 
 ```bash
-pnpm build     # Ensure the project builds
-pnpm check     # Lint + types + format
+bun run build     # Ensure the project builds
+bun run check     # Type check + format check
 ```
 
 Running these before you create the PR will help reduce back and forth during review.
 
 ## Database Schema Changes
 
-When modifying the Prisma schema (`packages/db/prisma/schema.prisma`), follow this workflow:
+OneCLI uses **Kysely** as the runtime ORM and **Prisma** as a dev-only tool to manage `schema.prisma` and generate migration SQL files. The Prisma client is **not** generated or used at runtime — never `import` from `@prisma/client`.
 
-1. **Edit the schema** — add/modify models in `schema.prisma`
+When modifying the schema (`packages/db/prisma/schema.prisma`), follow this workflow:
+
+1. **Edit the schema** — add/modify models in `schema.prisma`.
 2. **Generate a migration**:
    ```bash
-   pnpm --filter @onecli/db prisma migrate dev --name <description>
+   bun run --filter @onecli/db migrate:dev -- --name <description>
    ```
    This creates a timestamped migration in `packages/db/prisma/migrations/`.
 3. **Review the SQL** — open the generated `migration.sql` and verify it does what you expect. Watch for unintended drops, renames, or data loss.
-4. **Regenerate the Prisma client**:
-   ```bash
-   pnpm db:generate
-   ```
-5. **Commit both** the schema change and the migration together.
+4. **Update Kysely types** — edit `packages/db/src/types.ts` by hand to mirror the new schema (no codegen). The CamelCasePlugin in `kysely.ts` maps camelCase fields to snake_case columns.
+5. **Commit all three together**: the `schema.prisma` change, the new migration directory, and the `types.ts` update.
 
 ### Migration Naming Convention
 

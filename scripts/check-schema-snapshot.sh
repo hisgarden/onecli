@@ -16,7 +16,7 @@ MIGRATIONS_DIR="packages/db/prisma/migrations"
 # Check for uncommitted schema changes
 if ! git diff --quiet HEAD -- "$SCHEMA_FILE" 2>/dev/null; then
   echo "WARNING: schema.prisma has uncommitted changes"
-  echo "If you modified the schema, run: pnpm --filter @onecli/db prisma migrate dev --name <description>"
+  echo "If you modified the schema, run: cd packages/db && bunx prisma migrate dev --name <description>"
   echo ""
   git diff --stat HEAD -- "$SCHEMA_FILE"
   exit 1
@@ -38,5 +38,6 @@ echo "PASS: Schema snapshot is clean"
 
 ################################################################################
 # Changelog:
+# 2026-04-08  Update guidance message: pnpm filter → bunx (Phase 2 toolchain)
 # 2026-03-24  Initial creation — schema snapshot check
 ################################################################################

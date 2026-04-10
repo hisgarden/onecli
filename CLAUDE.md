@@ -5,25 +5,42 @@ Cloud backend for OneCLI — manages authentication, integrations, and permissio
 ## Commands
 
 ```bash
-pnpm dev          # Start development
-pnpm build        # Build all
-pnpm check        # Lint + types + format
-pnpm fix          # Auto-fix lint + format
-pnpm db:generate  # Generate Prisma client
-pnpm db:migrate   # Run migrations (dev)
-pnpm db:studio    # Open Prisma Studio
+bun run dev                                      # Start API + dashboard
+bun run build                                    # Build dashboard SPA
+bun run check                                    # Type check + format check
+bun run format                                   # Auto-format
+cd packages/db && bunx prisma generate           # Generate Prisma client
+cd packages/db && bunx prisma migrate dev        # Run migrations (dev)
+cd packages/db && bunx prisma studio             # Open Prisma Studio
 ```
 
 ## Structure
 
 ```
-apps/web/         # Next.js 16 app (App Router)
-packages/db/      # Prisma ORM + migrations
-packages/infra/   # AWS CDK infrastructure
+apps/api/         # Elysia API (Bun runtime, port 10254)
+apps/dashboard/   # Vite + React 19 SPA (port 3000 dev)
+apps/gateway/     # Rust agent gateway (data plane — port 10255)
+packages/db/      # Kysely query builder + SQL migrations
+packages/services/# Shared service layer (TypeScript)
 packages/ui/      # Shared components (shadcn/ui)
 packages/eslint-config/
 packages/typescript-config/
 ```
+
+## Data-plane isolation (security invariant)
+
+`apps/gateway/` is the only component that handles plaintext secrets. It MUST remain pure Rust + Cargo. No JavaScript, no Bun runtime, no transitive npm deps. Any feature that needs JS belongs in `apps/api/` (control plane) and must communicate with the gateway via the documented HTTP/JWT interface only.
+
+## Database — Kysely + Prisma (split roles)
+
+- **Runtime ORM**: [Kysely](https://kysely.dev) — `packages/db/src/kysely.ts`. All application queries go through Kysely. Hand-written types in `packages/db/src/types.ts` mirror the schema.
+- **Schema definition**: `packages/db/prisma/schema.prisma` (dev-only source of truth).
+- **Migration generation** (dev): `bun run --filter @onecli/db migrate:dev -- --name <description>` — creates a SQL file under `packages/db/prisma/migrations/`.
+- **Migration application**:
+  - Local dev / CI integration: `bun run --filter @onecli/db migrate:deploy`
+  - **Production runtime**: `docker/migrate.sh` (raw psql, no Prisma CLI ships in the image — see `docker/Dockerfile.bun` runtime stage).
+- **Schema drift check** (CI): `bun run --filter @onecli/db migrate:diff` — fails PRs that change the schema without a matching migration.
+- **Prisma client is NOT generated or used.** No code imports from `@prisma/client`. If you find yourself wanting one, use Kysely instead.
 
 ## Environment Variables
 
@@ -100,11 +117,12 @@ When adding components, use shadcn CLI or copy from ui.shadcn.com.
 - **Button loading states** - replace icon with spinner, update text (e.g., "Connecting..."), and disable
 - **Verify library APIs are current** - check official docs for deprecated/legacy patterns before implementing
 
-## Database (Prisma)
+## Database (see "Database — Kysely + Prisma" above)
 
-- Schema at `packages/db/prisma/schema.prisma`
-- Always run `pnpm db:generate` after schema changes
-- Migrations run automatically on container startup via `entrypoint.sh`
+- Schema source of truth: `packages/db/prisma/schema.prisma`
+- After editing the schema, hand-update `packages/db/src/types.ts` to keep Kysely types in sync (no codegen — these are written by hand on purpose)
+- Generate a new migration: `bun run --filter @onecli/db migrate:dev -- --name <description>`
+- Migrations run automatically on container startup via `entrypoint.sh` → `migrate.sh` (raw psql, no Prisma CLI in the runtime image)
 
 ## Infrastructure & Deployment
 

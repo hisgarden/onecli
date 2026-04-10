@@ -55,3 +55,6 @@ apps/gateway/target/
 
 # Playwright MCP
 .playwright-mcp
+
+# Dev PID files
+.dev-*.pid

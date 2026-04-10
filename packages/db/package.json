@@ -10,7 +10,10 @@
     "./errors": "./src/errors.ts"
   },
   "scripts": {
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit",
+    "migrate:dev": "prisma migrate dev",
+    "migrate:diff": "prisma migrate diff",
+    "migrate:deploy": "prisma migrate deploy"
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^3.3.0",
@@ -21,6 +24,7 @@
     "@onecli/typescript-config": "workspace:*",
     "@types/node": "^22.15.3",
     "@types/pg": "^8.20.0",
+    "prisma": "^7.7.0",
     "typescript": "5.9.2"
   }
 }

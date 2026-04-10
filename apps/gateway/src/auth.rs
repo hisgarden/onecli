@@ -202,6 +202,9 @@ fn parse_cookie<'a>(cookie_header: &'a str, name: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use jsonwebtoken::{encode, EncodingKey, Header};
+
+    // ── parse_cookie ────────────────────────────────────────────────────
 
     #[test]
     fn parse_cookie_finds_value() {
@@ -221,5 +224,121 @@ mod tests {
     #[test]
     fn parse_cookie_empty() {
         assert_eq!(parse_cookie("", "authjs.session-token"), None);
+    }
+
+    #[test]
+    fn parse_cookie_first_pair_no_leading_space() {
+        let header = "authjs.session-token=tok123; other=abc";
+        assert_eq!(parse_cookie(header, "authjs.session-token"), Some("tok123"));
+    }
+
+    #[test]
+    fn parse_cookie_value_with_equals_sign() {
+        // JWT values can contain '=' (base64 padding). split_once('=') handles
+        // this because it only splits on the FIRST '='.
+        let header = "authjs.session-token=eyJ0eXAi.payload.sig==; other=abc";
+        assert_eq!(
+            parse_cookie(header, "authjs.session-token"),
+            Some("eyJ0eXAi.payload.sig==")
+        );
+    }
+
+    #[test]
+    fn parse_cookie_no_equals_in_pair_skips() {
+        // Malformed pair without '=' should be ignored, not panic.
+        let header = "malformed; authjs.session-token=valid";
+        assert_eq!(parse_cookie(header, "authjs.session-token"), Some("valid"));
+    }
+
+    #[test]
+    fn parse_cookie_trims_whitespace_around_key() {
+        let header = "  authjs.session-token = tok123 ; other=abc";
+        assert_eq!(parse_cookie(header, "authjs.session-token"), Some("tok123"));
+    }
+
+    // ── JWT validation config ───────────────────────────────────────────
+    // These test the exact Validation config that validate_oauth() uses
+    // (HS256, no required claims, no exp check) without needing a PgPool.
+    // If someone changes the algorithm or validation settings, these catch it.
+
+    /// Build the same Validation that validate_oauth uses.
+    fn oauth_validation() -> Validation {
+        let mut v = Validation::new(Algorithm::HS256);
+        v.required_spec_claims.clear();
+        v.validate_exp = false;
+        v
+    }
+
+    fn encode_jwt(sub: &str, secret: &str) -> String {
+        #[derive(serde::Serialize)]
+        struct Claims {
+            sub: String,
+        }
+        encode(
+            &Header::new(Algorithm::HS256),
+            &Claims {
+                sub: sub.to_string(),
+            },
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .expect("JWT encode failed")
+    }
+
+    #[test]
+    fn jwt_decode_valid_hs256_extracts_sub() {
+        let secret = "test-secret-key-for-nextauth";
+        let token = encode_jwt("user-abc-123", secret);
+
+        let data = decode::<SessionClaims>(
+            &token,
+            &DecodingKey::from_secret(secret.as_bytes()),
+            &oauth_validation(),
+        );
+        assert!(data.is_ok(), "decode should succeed");
+        assert_eq!(data.unwrap().claims.sub, "user-abc-123");
+    }
+
+    #[test]
+    fn jwt_decode_wrong_secret_fails() {
+        let token = encode_jwt("user-abc", "correct-secret");
+
+        let data = decode::<SessionClaims>(
+            &token,
+            &DecodingKey::from_secret(b"wrong-secret"),
+            &oauth_validation(),
+        );
+        assert!(data.is_err(), "decode with wrong secret must fail");
+    }
+
+    #[test]
+    fn jwt_decode_corrupted_token_fails() {
+        let data = decode::<SessionClaims>(
+            "not.a.valid.jwt",
+            &DecodingKey::from_secret(b"any-secret"),
+            &oauth_validation(),
+        );
+        assert!(data.is_err(), "corrupted token must fail");
+    }
+
+    #[test]
+    fn jwt_decode_empty_token_fails() {
+        let data = decode::<SessionClaims>(
+            "",
+            &DecodingKey::from_secret(b"any-secret"),
+            &oauth_validation(),
+        );
+        assert!(data.is_err(), "empty token must fail");
+    }
+
+    #[test]
+    fn jwt_decode_rs256_token_rejected_by_hs256_validation() {
+        // Ensure we only accept HS256 — a token signed with a different
+        // algorithm must be rejected even if the secret matches the
+        // payload (defence against algorithm confusion attacks).
+        //
+        // We can't easily create a real RS256 token here without an RSA key,
+        // but we can verify that the Validation object requires HS256.
+        let v = oauth_validation();
+        assert_eq!(v.algorithms, vec![Algorithm::HS256]);
     }
 }

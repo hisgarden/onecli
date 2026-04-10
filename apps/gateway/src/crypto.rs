@@ -261,8 +261,8 @@ mod tests {
 
     #[tokio::test]
     async fn decrypt_nodejs_fixture() {
-        let service =
-            CryptoService::from_base64_key(FIXTURE_KEY_B64).expect("create service from fixture key");
+        let service = CryptoService::from_base64_key(FIXTURE_KEY_B64)
+            .expect("create service from fixture key");
         let decrypted = service
             .decrypt(FIXTURE_WIRE)
             .await

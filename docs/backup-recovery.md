@@ -23,7 +23,7 @@ agents must re-trust a new certificate. Both should be backed up regularly.
 
 ```bash
 # From the project root (uses DATABASE_URL from .env)
-pnpm db:backup
+bun run db:backup
 
 # Custom output directory
 ./scripts/db-backup.sh /mnt/backups/
@@ -95,13 +95,13 @@ Vault). Never store it alongside the database backup.
 1. **Start PostgreSQL**
 
    ```bash
-   pnpm db:up
+   bun run db:up
    ```
 
 2. **Restore the database**
 
    ```bash
-   pnpm db:restore backups/onecli_backup_20260324_120000.sql.gz
+   bun run db:restore backups/onecli_backup_20260324_120000.sql.gz
    ```
 
    This drops and recreates all tables from the backup.
@@ -111,7 +111,7 @@ Vault). Never store it alongside the database backup.
    If the backup was taken before recent schema changes:
 
    ```bash
-   pnpm db:migrate
+   cd packages/db && bunx prisma migrate deploy
    ```
 
 4. **Restore CA key**
@@ -139,7 +139,7 @@ Vault). Never store it alongside the database backup.
 6. **Start the application**
 
    ```bash
-   pnpm dev
+   bun run dev
    # or
    docker compose -f docker/docker-compose.yml up -d
    ```
@@ -154,7 +154,7 @@ Vault). Never store it alongside the database backup.
    curl -s http://localhost:10255/healthz
 
    # Check agents and secrets are present
-   pnpm db:studio
+   cd packages/db && bunx prisma studio
    ```
 
 ## Recovery Time Objectives
@@ -172,17 +172,17 @@ Run a recovery drill periodically:
 
 ```bash
 # 1. Take a backup
-pnpm db:backup
+bun run db:backup
 
 # 2. Nuke the database
-pnpm db:nuke
+bun run db:nuke
 
 # 3. Start a fresh database
-pnpm db:up
+bun run db:up
 
 # 4. Restore
-pnpm db:restore backups/onecli_backup_*.sql.gz
+bun run db:restore backups/onecli_backup_*.sql.gz
 
 # 5. Verify
-pnpm db:studio
+cd packages/db && bunx prisma studio
 ```

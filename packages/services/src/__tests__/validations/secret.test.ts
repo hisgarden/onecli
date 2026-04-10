@@ -104,6 +104,27 @@ describe("createSecretSchema", () => {
       expect(result.success).toBe(true);
     });
   });
+
+  it("should accept api_key type", () => {
+    const result = createSecretSchema.safeParse({
+      name: "Resend Key",
+      type: "api_key",
+      value: "re_123_abc",
+      hostPattern: "api.resend.com",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("should not require injectionConfig for api_key type", () => {
+    const result = createSecretSchema.safeParse({
+      name: "Resend Key",
+      type: "api_key",
+      value: "re_123_abc",
+      hostPattern: "api.resend.com",
+      injectionConfig: null,
+    });
+    expect(result.success).toBe(true);
+  });
 });
 
 describe("updateSecretSchema", () => {

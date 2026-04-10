@@ -21,22 +21,13 @@
     "db:restore": "./scripts/db-restore.sh",
     "test": "cd packages/services && bun test && cd ../../apps/api && bun test",
     "test:unit": "cd packages/services && bun test",
-    "test:integration": "./scripts/test-integration.sh",
-    "prepare": "husky"
+    "test:integration": "./scripts/test-integration.sh"
   },
   "devDependencies": {
-    "husky": "^9.1.7",
-    "lint-staged": "^16.3.1",
     "prettier": "^3.7.4",
     "prettier-plugin-tailwindcss": "^0.7.2",
     "typescript": "5.9.2"
   },
-  "packageManager": "pnpm@9.0.0",
   "version": "1.6.0",
-  "license": "Apache-2.0",
-  "lint-staged": {
-    "*.{ts,tsx,js,jsx,md,css,json}": [
-      "prettier --write"
-    ]
-  }
+  "license": "Apache-2.0"
 }

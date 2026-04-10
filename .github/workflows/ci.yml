@@ -24,29 +24,17 @@ jobs:
         with:
           workspaces: apps/gateway -> target
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v5
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: pnpm
-
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Generate Prisma client
-        run: pnpm --filter @onecli/db generate
+        run: bun install --frozen-lockfile
 
       - name: Type check
-        run: pnpm check:bun
+        run: bun run check:bun
 
       - name: Format check
-        run: pnpm format:check
+        run: bun run format:check
 
       - name: Unit tests (services)
         run: cd packages/services && bun test --coverage
@@ -80,7 +68,7 @@ jobs:
         run: |
           docker run -d --name shadow-db -e POSTGRES_USER=ci -e POSTGRES_PASSWORD=ci -e POSTGRES_DB=shadow -p 5433:5432 postgres:18-alpine
           until docker exec shadow-db pg_isready; do sleep 1; done
-          pnpm --filter @onecli/db exec prisma migrate diff \
+          bun run --filter @onecli/db migrate:diff \
             --from-migrations ./prisma/migrations \
             --to-schema-datamodel ./prisma/schema.prisma \
             --shadow-database-url postgresql://ci:ci@localhost:5433/shadow \
@@ -121,23 +109,14 @@ jobs:
         with:
           workspaces: apps/gateway -> target
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Generate Prisma client
-        run: pnpm --filter @onecli/db generate
+        run: bun install --frozen-lockfile
 
       - name: Run Prisma migrations
-        run: pnpm --filter @onecli/db prisma migrate deploy
+        run: bun run --filter @onecli/db migrate:deploy
 
       - name: Gateway integration tests
         run: cd apps/gateway && cargo test -- --test-threads=1

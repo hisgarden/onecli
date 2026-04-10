@@ -26,7 +26,7 @@ const hostPatternSchema = z
 
 export const createSecretSchema = z.object({
   name: z.string().trim().min(1).max(255),
-  type: z.enum(["anthropic", "generic"]),
+  type: z.enum(["anthropic", "generic", "api_key"]),
   value: z.string().min(1).max(10000),
   hostPattern: hostPatternSchema,
   pathPattern: z.string().max(1000).optional(),

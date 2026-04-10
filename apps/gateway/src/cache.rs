@@ -223,4 +223,70 @@ mod tests {
         let result: Option<MyData> = store.get("typed").await;
         assert_eq!(result, Some(data));
     }
+
+    // ── del_by_prefix ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn del_by_prefix_removes_matching_keys() {
+        let store = new_store();
+        store.set("agent:a1:host1", &"v1", 60).await;
+        store.set("agent:a1:host2", &"v2", 60).await;
+        store.set("agent:a2:host1", &"v3", 60).await;
+
+        store.del_by_prefix("agent:a1:").await;
+
+        let r1: Option<String> = store.get("agent:a1:host1").await;
+        let r2: Option<String> = store.get("agent:a1:host2").await;
+        let r3: Option<String> = store.get("agent:a2:host1").await;
+        assert!(r1.is_none(), "a1:host1 should be deleted");
+        assert!(r2.is_none(), "a1:host2 should be deleted");
+        assert_eq!(r3.as_deref(), Some("v3"), "a2:host1 should survive");
+    }
+
+    #[tokio::test]
+    async fn del_by_prefix_no_match_is_noop() {
+        let store = new_store();
+        store.set("keep-me", &"value", 60).await;
+        store.del_by_prefix("nonexistent:").await;
+        let result: Option<String> = store.get("keep-me").await;
+        assert_eq!(result.as_deref(), Some("value"));
+    }
+
+    // ── incr ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn incr_starts_at_one_for_new_key() {
+        let store = new_store();
+        let count = store.incr("counter:new", 60).await;
+        assert_eq!(count, Some(1));
+    }
+
+    #[tokio::test]
+    async fn incr_increments_existing_key() {
+        let store = new_store();
+        store.incr("counter:x", 60).await;
+        store.incr("counter:x", 60).await;
+        let count = store.incr("counter:x", 60).await;
+        assert_eq!(count, Some(3));
+    }
+
+    #[tokio::test]
+    async fn incr_resets_after_expiry() {
+        let store = new_store();
+        // Set with TTL=0 (already expired)
+        store.incr("counter:exp", 0).await;
+        // Next incr should see it as expired and reset to 1
+        let count = store.incr("counter:exp", 60).await;
+        assert_eq!(count, Some(1));
+    }
+
+    #[tokio::test]
+    async fn incr_value_readable_via_get_raw() {
+        let store = new_store();
+        store.incr("counter:r", 60).await;
+        store.incr("counter:r", 60).await;
+        // The stored value should be the string "2"
+        let raw = store.get_raw("counter:r").await;
+        assert_eq!(raw.as_deref(), Some("2"));
+    }
 }

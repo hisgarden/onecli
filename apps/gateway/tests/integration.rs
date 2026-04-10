@@ -367,7 +367,8 @@ fn cors_allowed_origin_returns_headers() {
     let resp = String::from_utf8_lossy(&buf[..n]);
 
     assert!(
-        resp.contains("access-control-allow-origin") || resp.contains("Access-Control-Allow-Origin"),
+        resp.contains("access-control-allow-origin")
+            || resp.contains("Access-Control-Allow-Origin"),
         "expected CORS allow-origin header in response, got: {resp}"
     );
     assert!(

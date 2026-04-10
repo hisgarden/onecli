@@ -597,7 +597,10 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o644, "test setup: key should be 0644");
-        assert!(mode & 0o077 != 0, "key should be flagged as overly permissive");
+        assert!(
+            mode & 0o077 != 0,
+            "key should be flagged as overly permissive"
+        );
 
         // Load should still succeed (warning, not error)
         let ca = CertificateAuthority::load_or_generate(data_dir)

@@ -1,0 +1,5 @@
+[test]
+# Preload the test mock setup so heavy modules (auth, db, services) are
+# replaced before app.ts imports them. Without this, importing app.ts would
+# construct a real pg.Pool and a real Better Auth instance.
+preload = ["./src/__tests__/helpers/preload.ts"]

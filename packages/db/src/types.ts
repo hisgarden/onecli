@@ -1,5 +1,7 @@
 /**
- * Kysely database type definitions — derived from Prisma schema.
+ * Kysely database type definitions — HAND-MAINTAINED to mirror
+ * `packages/db/prisma/schema.prisma`. There is no codegen step.
+ * When you change schema.prisma, update this file in the same commit.
  *
  * Column names use camelCase here. The CamelCasePlugin in kysely.ts
  * automatically maps these to snake_case in generated SQL and back

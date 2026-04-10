@@ -90,6 +90,23 @@ describe("secret-service", () => {
       const result = await listSecrets(ACCOUNT_ID);
       expect(result[0]!.typeLabel).toBe("custom_type");
     });
+
+    it("should show api_key type label in list", async () => {
+      mockDb.queueResult([
+        {
+          id: "1",
+          name: "Resend Key",
+          type: "api_key",
+          hostPattern: "api.resend.com",
+          pathPattern: null,
+          injectionConfig: null,
+          createdAt: new Date(),
+        },
+      ]);
+
+      const result = await listSecrets(ACCOUNT_ID);
+      expect(result[0]!.typeLabel).toBe("API Key");
+    });
   });
 
   describe("createSecret", () => {
@@ -198,6 +215,27 @@ describe("secret-service", () => {
       });
 
       expect(mockEncrypt).toHaveBeenCalledWith("my-api-key");
+    });
+
+    it("should auto-set injection config for api_key type", async () => {
+      mockDb.queueResult({
+        id: "new-secret",
+        name: "Resend Key",
+        type: "api_key",
+        hostPattern: "api.resend.com",
+        pathPattern: null,
+        createdAt: new Date(),
+      });
+
+      const result = await createSecret(ACCOUNT_ID, {
+        name: "Resend Key",
+        type: "api_key" as any,
+        value: "re_123_abc",
+        hostPattern: "api.resend.com",
+      });
+
+      expect(result.id).toBe("new-secret");
+      expect(mockEncrypt).toHaveBeenCalledWith("re_123_abc");
     });
   });
 

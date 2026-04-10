@@ -7,7 +7,7 @@
  */
 import { betterAuth } from "better-auth";
 import pg from "pg";
-import { createId } from "@paralleldrive/cuid2";
+import { generateId } from "@onecli/db";
 
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
@@ -73,7 +73,7 @@ export const auth = betterAuth({
 
   advanced: {
     database: {
-      generateId: () => createId(),
+      generateId: () => generateId(),
     },
     cookiePrefix: "onecli",
   },
