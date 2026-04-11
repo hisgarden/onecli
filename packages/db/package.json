@@ -13,7 +13,7 @@
     "check-types": "tsc --noEmit",
     "migrate:dev": "prisma migrate dev",
     "migrate:diff": "prisma migrate diff",
-    "migrate:deploy": "prisma migrate deploy"
+    "migrate:deploy": "cd ../.. && sh docker/migrate.sh"
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^3.3.0",
