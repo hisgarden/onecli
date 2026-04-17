@@ -1,0 +1,107 @@
+# OneCLI API + Dashboard — Apple native container variant
+# Uses alpine instead of Chainguard wolfi-base (which segfaults in Apple's VM).
+# Relaxes --frozen-lockfile (bun version may differ from lockfile).
+#
+# Usage:
+#   container build -t onecli-api -f docker/Dockerfile.apple.bun .
+
+# ──────────────────────────────────────────────
+# Stage 1: Install deps + build SPA
+# ──────────────────────────────────────────────
+FROM oven/bun:1-alpine AS builder
+
+WORKDIR /app
+
+COPY package.json bun.lock ./
+COPY apps/api/package.json apps/api/
+COPY apps/dashboard/package.json apps/dashboard/
+COPY packages/db/package.json packages/db/
+COPY packages/services/package.json packages/services/
+COPY packages/ui/package.json packages/ui/
+COPY packages/eslint-config/package.json packages/eslint-config/
+COPY packages/typescript-config/package.json packages/typescript-config/
+
+RUN bun install
+
+COPY . .
+
+RUN cd apps/dashboard && bun run build
+
+# Fail the build loudly if Vite produces an empty dist (which it can do
+# silently on misconfiguration), instead of shipping a blank dashboard.
+RUN test -f /app/apps/dashboard/dist/index.html
+
+# ──────────────────────────────────────────────
+# Stage 2: Production runtime (Alpine-based)
+# ──────────────────────────────────────────────
+FROM oven/bun:1-alpine AS runner
+WORKDIR /app
+
+# Create nonroot user (matching Chainguard UID 65532 for volume compat)
+RUN addgroup -g 65532 -S nonroot && \
+    adduser -u 65532 -S nonroot -G nonroot
+
+# Install runtime dependencies (bun already present in base image).
+# jq is needed only for the dependency-merge step below; removed afterward.
+# curl is dropped — wget covers the healthcheck and keeps the image smaller.
+RUN apk update && \
+    apk add --no-cache bash wget jq postgresql-client && \
+    rm -rf /var/cache/apk/*
+
+# Install API + DB + services runtime deps (merge + strip workspace refs).
+# Services deps must be included — @onecli/services depends on pino/zod which
+# are NOT transitively pulled via the api package alone.
+COPY --from=builder --chown=nonroot:nonroot /app/apps/api/package.json /tmp/api-pkg.json
+COPY --from=builder --chown=nonroot:nonroot /app/packages/db/package.json /tmp/db-pkg.json
+COPY --from=builder --chown=nonroot:nonroot /app/packages/services/package.json /tmp/services-pkg.json
+RUN jq -s '.[0].dependencies * .[1].dependencies * .[2].dependencies | del(.["@onecli/db"], .["@onecli/services"], .["@onecli/typescript-config"]) | {dependencies: .}' /tmp/api-pkg.json /tmp/db-pkg.json /tmp/services-pkg.json > ./package.json && \
+    bun install --production --no-save && \
+    rm -rf /root/.bun/install/cache && \
+    apk del jq
+
+# Built SPA
+COPY --from=builder --chown=nonroot:nonroot /app/apps/dashboard/dist ./apps/dashboard/dist
+
+# API source
+COPY --from=builder --chown=nonroot:nonroot /app/apps/api/src ./apps/api/src
+COPY --from=builder --chown=nonroot:nonroot /app/apps/api/package.json ./apps/api/package.json
+
+# Service layer
+COPY --from=builder --chown=nonroot:nonroot /app/packages/services/src ./packages/services/src
+COPY --from=builder --chown=nonroot:nonroot /app/packages/services/package.json ./packages/services/package.json
+
+# DB package (source + migrations SQL)
+COPY --from=builder --chown=nonroot:nonroot /app/packages/db/src ./packages/db/src
+COPY --from=builder --chown=nonroot:nonroot /app/packages/db/package.json ./packages/db/package.json
+COPY --from=builder --chown=nonroot:nonroot /app/packages/db/prisma ./packages/db/prisma
+
+# UI types
+COPY --from=builder --chown=nonroot:nonroot /app/packages/ui/src ./packages/ui/src
+COPY --from=builder --chown=nonroot:nonroot /app/packages/ui/package.json ./packages/ui/package.json
+
+# Workspace root + symlinks for @onecli/* module resolution
+COPY --chown=nonroot:nonroot package.json ./
+RUN mkdir -p node_modules/@onecli && \
+    ln -s /app/packages/db node_modules/@onecli/db && \
+    ln -s /app/packages/services node_modules/@onecli/services && \
+    ln -s /app/packages/ui node_modules/@onecli/ui
+
+# Migration runner + entrypoint
+COPY --chown=nonroot:nonroot docker/migrate.sh ./migrate.sh
+COPY --chown=nonroot:nonroot docker/entrypoint-bun.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh ./migrate.sh
+
+RUN mkdir -p /app/data && chown nonroot:nonroot /app/data
+VOLUME ["/app/data"]
+
+USER nonroot
+
+ENV NODE_ENV=production
+ENV PORT=10254
+
+EXPOSE 10254
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:10254/api/health || exit 1
+
+CMD ["./entrypoint.sh"]

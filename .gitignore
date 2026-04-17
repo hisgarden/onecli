@@ -58,3 +58,6 @@ apps/gateway/target/
 
 # Dev PID files
 .dev-*.pid
+
+# Compound Engineering review artifacts (local)
+.context/
