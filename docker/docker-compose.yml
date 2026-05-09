@@ -11,7 +11,7 @@ name: onecli
 
 services:
   postgres:
-    image: postgres:18-alpine
+    image: cgr.dev/chainguard/postgres:latest
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-onecli}
